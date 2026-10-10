@@ -1,0 +1,184 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Accueil · F1 Simulator{% endblock %}
+
+{% block body %}
+<section class="relative isolate -mx-4 -mt-4 flex min-h-[560px] items-end overflow-hidden border-b border-f1-border sm:-mx-6 sm:-mt-6">
+	<canvas id="track-preview" class="absolute inset-0 -z-20 h-full w-full" aria-hidden="true"
+			data-track-url="{{ path('api_fastf1_track', {year: 2023}) }}?gp=Italian%20Grand%20Prix"></canvas>
+	<div class="absolute inset-0 -z-10 bg-[#101014]/70" aria-hidden="true"></div>
+	<div class="absolute left-0 top-0 h-full w-2 bg-f1-red" aria-hidden="true"></div>
+
+	<div class="w-full px-6 pb-12 pt-32 sm:px-10 sm:pb-16 lg:px-16">
+		<p class="mb-5 flex items-center gap-3 font-mono text-xs uppercase text-gray-300">
+			<span class="h-2 w-2 rounded-full bg-green-400"></span>
+			Race control · données FastF1
+		</p>
+		<h1 class="max-w-3xl text-5xl font-black uppercase leading-[0.92] text-white sm:text-7xl">F1<br>Simulator</h1>
+		<p class="mt-6 max-w-xl text-base text-gray-200 sm:text-lg">Construis tes championnats, compose chaque calendrier et suis les courses sur leur véritable tracé.</p>
+		<div class="mt-8 flex flex-wrap gap-3">
+			<a href="{{ path('app_seasons') }}" class="inline-flex items-center gap-3 bg-f1-red px-5 py-3 text-sm font-bold uppercase text-white transition hover:bg-red-700">
+				<span aria-hidden="true">＋</span> Gérer les saisons
+			</a>
+			<a href="{{ path('app_replay') }}" class="inline-flex items-center gap-3 border border-white/50 bg-black/30 px-5 py-3 text-sm font-bold uppercase text-white transition hover:bg-white/10">
+				<span aria-hidden="true">▶</span> Lancer un replay
+			</a>
+		</div>
+		<p id="track-caption" class="mt-7 font-mono text-xs uppercase text-gray-400">Monza · Italie · tracé FastF1 2023</p>
+	</div>
+</section>
+
+<section class="grid grid-cols-2 border-b border-f1-border md:grid-cols-5" aria-label="État du championnat">
+	{% set metrics = [
+		{label: 'Pilotes', value: stats.drivers},
+		{label: 'Écuries', value: stats.teams},
+		{label: 'Divisions', value: stats.divisions},
+		{label: 'Saisons', value: stats.seasons},
+		{label: 'Courses', value: stats.races}
+	] %}
+	{% for metric in metrics %}
+		<div class="border-b border-r border-f1-border px-5 py-5 last:border-r-0 md:border-b-0">
+			<p class="font-mono text-3xl font-bold text-white">{{ metric.value }}</p>
+			<p class="mt-1 text-xs uppercase text-gray-400">{{ metric.label }}</p>
+		</div>
+	{% endfor %}
+</section>
+
+<section class="grid gap-10 py-10 lg:grid-cols-[1.15fr_0.85fr]">
+	<div>
+		<div class="mb-4 flex items-baseline justify-between border-b border-f1-border pb-3">
+			<h2 class="text-lg font-bold uppercase">Championnats récents</h2>
+			<a href="{{ path('app_seasons') }}" class="text-xs uppercase text-gray-400 hover:text-white">Tous les championnats</a>
+		</div>
+		{% for season in recent_seasons %}
+			<a href="{{ path('app_seasons') }}" class="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-f1-border py-4 hover:bg-white/[0.03]">
+				<span>
+					<span class="block font-semibold">{{ season.nom }}</span>
+					<span class="mt-1 block text-xs text-gray-400">{{ season.courses|length }} courses · {{ season.statut }}</span>
+				</span>
+				<span class="font-mono text-xs text-gray-400">{{ season.annee }} ↗</span>
+			</a>
+		{% else %}
+			<div class="border-b border-f1-border py-8 text-sm text-gray-400">
+				Aucun championnat pour le moment. Crée une saison et ajoute des courses FastF1.
+			</div>
+		{% endfor %}
+	</div>
+
+	<div>
+		<div class="mb-4 flex items-baseline justify-between border-b border-f1-border pb-3">
+			<h2 class="text-lg font-bold uppercase">Prochaines courses</h2>
+			<a href="{{ path('app_seasons') }}" class="text-xs uppercase text-gray-400 hover:text-white">Calendrier ↗</a>
+		</div>
+		{% for race in upcoming_races %}
+			<a href="{{ path('app_replay', {year: race.date ? race.date|date('Y') : current_year, gp: race.nom}) }}" class="flex items-center gap-4 border-b border-f1-border py-4 hover:bg-white/[0.03]">
+				<span class="w-14 shrink-0 font-mono text-xs text-f1-red">{{ race.date ? race.date|date('d M') : 'À venir' }}</span>
+				<span class="min-w-0 flex-1">
+					<span class="block truncate font-semibold">{{ race.nom }}</span>
+					<span class="block text-xs text-gray-400">{{ race.circuit.ville ?? race.circuit.pays ?? 'Circuit' }}</span>
+				</span>
+				<span class="text-gray-500" aria-hidden="true">→</span>
+			</a>
+		{% else %}
+			<div class="border-b border-f1-border py-8 text-sm text-gray-400">
+				Aucune course planifiée. Le calendrier FastF1 est disponible dans la gestion des saisons.
+			</div>
+		{% endfor %}
+	</div>
+</section>
+
+<script>
+(function () {
+	'use strict';
+
+	var canvas = document.getElementById('track-preview');
+	var context = canvas.getContext('2d');
+	var circuit = null;
+	var bounds = null;
+	var startedAt = performance.now();
+
+	function resize() {
+		var ratio = window.devicePixelRatio || 1;
+		canvas.width = Math.round(canvas.clientWidth * ratio);
+		canvas.height = Math.round(canvas.clientHeight * ratio);
+		context.setTransform(ratio, 0, 0, ratio, 0, 0);
+	}
+
+	function point(index) {
+		var pad = 42;
+		var width = canvas.clientWidth - pad * 2;
+		var height = canvas.clientHeight - pad * 2;
+		var scale = Math.min(width / (bounds.maxX - bounds.minX), height / (bounds.maxY - bounds.minY));
+		return [
+			(canvas.clientWidth - (bounds.maxX - bounds.minX) * scale) / 2 + (circuit.x[index] - bounds.minX) * scale,
+			(canvas.clientHeight - (bounds.maxY - bounds.minY) * scale) / 2 + (bounds.maxY - circuit.y[index]) * scale
+		];
+	}
+
+	function draw(now) {
+		if (!circuit) return;
+		context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+		context.lineJoin = 'round';
+		context.lineCap = 'round';
+		context.beginPath();
+		circuit.x.forEach(function (_, index) {
+			var coordinate = point(index);
+			if (index === 0) context.moveTo(coordinate[0], coordinate[1]);
+			else context.lineTo(coordinate[0], coordinate[1]);
+		});
+		context.closePath();
+		context.strokeStyle = 'rgba(255,255,255,.18)';
+		context.lineWidth = 22;
+		context.stroke();
+		context.strokeStyle = 'rgba(255,255,255,.76)';
+		context.lineWidth = 2;
+		context.stroke();
+
+		var distance = ((now - startedAt) / 26000 * circuit.length_m) % circuit.length_m;
+		var low = 0;
+		var high = circuit.s.length - 1;
+		while (low < high) {
+			var middle = Math.ceil((low + high) / 2);
+			if (circuit.s[middle] <= distance) low = middle;
+			else high = middle - 1;
+		}
+		var position = point(low);
+		context.beginPath();
+		context.arc(position[0], position[1], 7, 0, Math.PI * 2);
+		context.fillStyle = '#e10600';
+		context.fill();
+		context.beginPath();
+		context.arc(position[0], position[1], 14 + Math.sin(now / 180) * 3, 0, Math.PI * 2);
+		context.strokeStyle = 'rgba(225,6,0,.62)';
+		context.lineWidth = 2;
+		context.stroke();
+		requestAnimationFrame(draw);
+	}
+
+	function loadTrack() {
+		fetch(canvas.dataset.trackUrl)
+			.then(function (response) {
+				if (!response.ok) throw new Error('Tracé indisponible');
+				return response.json();
+			})
+			.then(function (data) {
+				circuit = data;
+				bounds = {
+					minX: Math.min.apply(null, data.x), maxX: Math.max.apply(null, data.x),
+					minY: Math.min.apply(null, data.y), maxY: Math.max.apply(null, data.y)
+				};
+				document.getElementById('track-caption').textContent = data.name + ' · ' + data.location + ' · tracé FastF1';
+				resize();
+				requestAnimationFrame(draw);
+			})
+			.catch(function () {
+				canvas.classList.add('hidden');
+				document.getElementById('track-caption').textContent = 'Circuits réels disponibles via FastF1 dans le replay';
+			});
+	}
+
+	window.addEventListener('resize', resize);
+	loadTrack();
+})();
+</script>
+{% endblock %}

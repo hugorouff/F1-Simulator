@@ -1,0 +1,430 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Saisons · F1 Simulator{% endblock %}
+
+{% block body %}
+<section class="mb-7 flex flex-wrap items-end justify-between gap-3 border-b border-f1-border pb-5">
+    <div>
+        <p class="text-xs font-semibold uppercase text-f1-red">Championnats multi-divisions</p>
+        <h1 class="mt-1 text-2xl font-extrabold">Composer une saison</h1>
+    </div>
+    <a href="{{ path('app_replay') }}" class="text-sm text-gray-300 hover:text-white">Ouvrir le replay</a>
+</section>
+
+{% for message in app.flashes('success') %}
+    <p class="mb-4 border-l-4 border-green-500 bg-f1-card px-4 py-3 text-sm text-green-200">{{ message }}</p>
+{% endfor %}
+{% for message in app.flashes('error') %}
+    <p class="mb-4 border-l-4 border-f1-red bg-f1-card px-4 py-3 text-sm text-red-200">{{ message }}</p>
+{% endfor %}
+
+<form method="post" action="{{ path('app_seasons_create') }}" class="mb-8 border-y border-f1-border py-5"
+      id="season-form" data-events-url="{{ path('api_fastf1_events') }}">
+    <input type="hidden" name="_token" value="{{ csrf_token('create_season') }}">
+
+    <div class="grid gap-4 sm:grid-cols-[minmax(0,1fr)_12rem] sm:items-end">
+        <label class="block">
+            <span class="mb-2 block text-xs font-semibold uppercase text-gray-400">Nom de la saison</span>
+            <input name="name" maxlength="100" required placeholder="Ex. Championnat du monde"
+                   class="w-full rounded border border-f1-border bg-f1-dark p-3">
+        </label>
+        <label class="block">
+            <span class="mb-2 block text-xs font-semibold uppercase text-gray-400">Nombre de courses</span>
+            <input name="race_count" id="race-count" type="number" min="1" max="100" value="20" required
+                   class="w-full rounded border border-f1-border bg-f1-dark p-3">
+        </label>
+    </div>
+
+    <div class="mt-6">
+        <section>
+            <div class="mb-3 flex flex-wrap items-end gap-3 border-b border-f1-border pb-3">
+                <label class="min-w-56 flex-1">
+                    <span class="mb-2 block text-xs font-semibold uppercase text-gray-400">Circuits FastF1 disponibles</span>
+                    <input id="event-query" type="search" minlength="2" placeholder="Monza, Monaco, Silverstone…"
+                           class="w-full rounded border border-f1-border bg-f1-dark p-3">
+                </label>
+                <button type="button" id="search-events" class="rounded border border-f1-border px-4 py-3 text-sm font-semibold text-white hover:border-white">
+                    Rechercher
+                </button>
+            </div>
+            <p id="search-status" class="mb-2 min-h-5 text-sm text-gray-400" role="status">Chargement de tous les circuits FastF1…</p>
+            <fieldset id="events-list" class="max-h-72 overflow-y-auto border-y border-f1-border" aria-label="Résultats FastF1"></fieldset>
+        </section>
+
+        <section class="mt-7">
+            <div class="mb-3 flex flex-wrap items-baseline justify-between gap-3 border-b border-f1-border pb-3">
+                <h2 class="font-bold uppercase">Courses retenues</h2>
+                <span id="selection-count" class="font-mono text-sm text-gray-400" aria-live="polite">0 / 20</span>
+            </div>
+            <ul id="selected-events" class="divide-y divide-f1-border border-t border-f1-border"></ul>
+            <p id="empty-selection" class="border-b border-f1-border py-8 text-center text-sm text-gray-500">Ajoute les courses une par une depuis les résultats.</p>
+        </section>
+    </div>
+
+    <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-f1-border pt-4">
+                <p class="text-xs text-gray-500">Chaque circuit ne peut être ajouté qu’une fois. L’année FastF1 est gérée automatiquement pour le tracé.</p>
+        <button id="create-season" type="submit" disabled
+                class="rounded bg-f1-red px-5 py-3 text-sm font-bold uppercase text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">
+            Créer la saison
+        </button>
+    </div>
+    <div id="hidden-selections"></div>
+</form>
+
+<section class="mb-10 border-y border-f1-border py-5">
+    <div class="mb-4">
+        <p class="text-xs font-semibold uppercase text-f1-red">Pyramide sportive</p>
+        <h2 class="mt-1 text-lg font-bold">Divisions et niveaux</h2>
+    </div>
+    <form method="post" action="{{ path('app_division_create') }}" class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
+        <input type="hidden" name="_token" value="{{ csrf_token('create_division') }}">
+        <label class="block">
+            <span class="mb-2 block text-xs font-semibold uppercase text-gray-400">Nom de la division</span>
+            <input name="division_name" required maxlength="100" placeholder="F1, F2, F3…" class="w-full rounded border border-f1-border bg-f1-dark p-3">
+        </label>
+        <label class="block">
+            <span class="mb-2 block text-xs font-semibold uppercase text-gray-400">Niveau · 1 = élite</span>
+            <input name="division_level" type="number" min="1" max="50" required placeholder="1" class="w-full rounded border border-f1-border bg-f1-dark p-3">
+        </label>
+        <button type="submit" class="rounded border border-f1-border px-4 py-3 text-sm font-semibold hover:border-white">Ajouter la division</button>
+    </form>
+    <div class="mt-4 flex flex-wrap gap-2">
+        {% for division in divisions %}
+            <span class="border border-f1-border px-3 py-2 text-xs"><span class="font-mono text-f1-red">N{{ division.niveau }}</span> · {{ division.nom }} · {{ division.ecuries|length }} écurie(s)</span>
+        {% else %}
+            <p class="text-sm text-gray-500">Crée d’abord les divisions, de la plus haute (niveau 1) à la plus basse.</p>
+        {% endfor %}
+    </div>
+</section>
+
+<section>
+    <div class="mb-3 flex items-baseline justify-between">
+        <h2 class="text-lg font-bold">Saisons enregistrées</h2>
+        <span class="text-sm text-gray-400">{{ seasons|length }} saison{{ seasons|length == 1 ? '' : 's' }}</span>
+    </div>
+    <div class="overflow-x-auto border-y border-f1-border">
+        <table class="w-full text-left text-sm">
+            <thead class="text-xs uppercase text-gray-400">
+                <tr>
+                    <th class="py-3 pr-4">Saison</th>
+                    <th class="px-4">Courses</th>
+                    <th class="px-4">Classements par division</th>
+                    <th class="px-4">Statut</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-f1-border">
+                {% for season in seasons %}
+                    <tr>
+                        <td class="py-3 pr-4 font-semibold">{{ season.nom }}</td>
+                        <td class="px-4">
+                            <details>
+                                <summary class="cursor-pointer">{{ season.courses|length }} course(s)</summary>
+                                <ul class="min-w-64 py-2">
+                                    {% for course in season.courses %}
+                                        <li>
+                                            {% set raceYear = course.date ? course.date|date('Y') : season.annee %}
+                                            {% if raceYear >= 2018 and raceYear <= current_year %}
+                                                {% for division in divisions %}
+                                                    <a class="block py-1 text-gray-300 hover:text-white"
+                                                       href="{{ path('app_replay', {year: raceYear, gp: course.nom, course_id: course.id, division_id: division.id}) }}">
+                                                        {{ course.circuit.ville ?? course.nom }} · {{ division.nom }}
+                                                    </a>
+                                                {% else %}
+                                                    <span class="block py-1 text-gray-500">{{ raceYear }} · {{ course.nom }} · crée d’abord les divisions</span>
+                                                {% endfor %}
+                                            {% else %}
+                                                <span class="block py-1 text-gray-500">{{ raceYear }} · {{ course.nom }} · télémétrie indisponible</span>
+                                            {% endif %}
+                                        </li>
+                                    {% endfor %}
+                                </ul>
+                            </details>
+                        </td>
+                        <td class="px-4">
+                            {% if standings[season.id] is defined and standings[season.id] is not empty %}
+                                <details>
+                                    <summary class="cursor-pointer text-gray-300">Voir le classement</summary>
+                                    <div class="min-w-64 py-2">
+                                        {% for divisionStanding in standings[season.id] %}
+                                            <h3 class="mt-2 text-xs font-bold uppercase text-f1-red">{{ divisionStanding.division }}</h3>
+                                            <ol class="text-xs text-gray-300">
+                                                {% for team in divisionStanding.teams %}
+                                                    <li class="flex justify-between gap-4 py-1">
+                                                        <span>{{ team.rank }}. {{ team.name }}</span>
+                                                        <span class="font-mono">{{ team.points|number_format(0) }} pts</span>
+                                                    </li>
+                                                {% endfor %}
+                                            </ol>
+                                        {% endfor %}
+                                    </div>
+                                </details>
+                            {% else %}
+                                <span class="text-xs text-gray-500">Aucun résultat enregistré</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 text-gray-400">
+                            <span>{{ season.statut }}</span>
+                            <a href="{{ path('app_season_export', {id: season.id}) }}" class="mt-2 block text-xs text-gray-300 underline underline-offset-4 hover:text-white">Télécharger JSON</a>
+                            {% if season.statut != 'terminee' %}
+                                <form method="post" action="{{ path('app_season_close', {id: season.id}) }}" class="mt-2">
+                                    <input type="hidden" name="_token" value="{{ csrf_token('close_season_' ~ season.id) }}">
+                                    <button type="submit" class="rounded border border-f1-red px-3 py-2 text-xs font-semibold text-red-200 hover:bg-f1-red hover:text-white">
+                                        Clôturer la saison
+                                    </button>
+                                </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="4" class="py-8 text-center text-gray-400">Aucune saison créée.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="mt-10 border-y border-f1-border py-5">
+    <div class="mb-4">
+        <p class="text-xs font-semibold uppercase text-f1-red">Ordre d’inscription</p>
+        <h2 class="mt-1 text-lg font-bold">Choisir les écuries par division</h2>
+        <p class="mt-1 text-sm text-gray-400">Commence par la division 1 (F1), puis descends niveau par niveau. Une écurie inscrite disparaît des autres choix pour cette saison.</p>
+    </div>
+    {% for season in seasons %}
+        {% if season.statut != 'terminee' %}
+            <div class="mb-8 border-t border-f1-border pt-4">
+                <h3 class="mb-3 text-lg font-bold">{{ season.nom }}</h3>
+                {% for division in divisions %}
+                    {% set divisionTeams = season_teams[season.id][division.id] ?? {available: [], registered: []} %}
+                    <section class="border-b border-f1-border py-4">
+                        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                            <h4 class="font-bold"><span class="mr-2 font-mono text-f1-red">N{{ division.niveau }}</span>{{ division.nom }}</h4>
+                            <span class="text-xs text-gray-400">{{ divisionTeams.registered|length }} écurie(s) inscrite(s)</span>
+                        </div>
+                        {% if divisionTeams.registered is not empty %}
+                            <p class="mb-3 text-xs text-gray-400">Déjà inscrites : {{ divisionTeams.registered|join(', ') }}</p>
+                        {% endif %}
+                        {% if not divisionTeams.can_register %}
+                            <p class="text-sm text-gray-500">Inscris au moins quatre écuries dans la division précédente pour ouvrir ce niveau.</p>
+                        {% elseif divisionTeams.available is not empty %}
+                            <form method="post" action="{{ path('app_season_entry_create', {id: season.id}) }}" class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-end">
+                                <input type="hidden" name="_token" value="{{ csrf_token('register_team_' ~ season.id) }}">
+                                <input type="hidden" name="division_id" value="{{ division.id }}">
+                                <label class="block">
+                                    <span class="mb-2 block text-xs font-semibold uppercase text-gray-400">Écurie disponible</span>
+                                    <select name="team_id" required class="w-full rounded border border-f1-border bg-f1-dark p-3">
+                                        <option value="">Choisir une écurie…</option>
+                                        {% for team in divisionTeams.available %}<option value="{{ team.id }}">{{ team.nom }}</option>{% endfor %}
+                                    </select>
+                                </label>
+                                <fieldset>
+                                    <legend class="mb-2 text-xs font-semibold uppercase text-gray-400">Pilotes de l’écurie</legend>
+                                    <div class="grid max-h-36 grid-cols-2 gap-x-3 overflow-y-auto border-y border-f1-border sm:grid-cols-3">
+                                        {% for driver in roster %}
+                                            <label class="flex min-w-0 items-center gap-2 border-b border-f1-border py-2 text-xs">
+                                                <input type="checkbox" name="drivers[]" value="{{ driver.name }}" class="accent-red-600">
+                                                <span class="truncate">{{ driver.name }}</span>
+                                            </label>
+                                        {% endfor %}
+                                    </div>
+                                </fieldset>
+                                <button type="submit" class="rounded bg-f1-red px-4 py-3 text-xs font-bold uppercase text-white hover:bg-red-700">Inscrire en {{ division.nom }}</button>
+                            </form>
+                        {% else %}
+                            <p class="text-sm text-gray-500">Aucune écurie disponible dans cette division. Importe-en sur la page Imports JSON.</p>
+                        {% endif %}
+                    </section>
+                {% else %}
+                    <p class="text-sm text-gray-500">Crée F1 (niveau 1), puis les divisions inférieures, avant d’inscrire les écuries.</p>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% else %}
+        <p class="text-sm text-gray-500">Crée une saison avant d’inscrire des écuries.</p>
+    {% endfor %}
+</section>
+
+<script>
+(function () {
+    'use strict';
+
+    var form = document.getElementById('season-form');
+    var query = document.getElementById('event-query');
+    var raceCount = document.getElementById('race-count');
+    var searchButton = document.getElementById('search-events');
+    var eventsList = document.getElementById('events-list');
+    var selectedList = document.getElementById('selected-events');
+    var hiddenSelections = document.getElementById('hidden-selections');
+    var status = document.getElementById('search-status');
+    var count = document.getElementById('selection-count');
+    var submit = document.getElementById('create-season');
+    var emptySelection = document.getElementById('empty-selection');
+    var selected = new Map();
+    var catalog = [];
+    var requestNumber = 0;
+
+    function keyFor(event) {
+        return event.circuit_key || event.year + ':' + event.round;
+    }
+
+    function updateSelection() {
+        var items = Array.from(selected.values()).sort(function (left, right) {
+            return (left.date || '').localeCompare(right.date || '') || left.year - right.year || left.round - right.round;
+        });
+        var target = parseInt(raceCount.value, 10) || 0;
+        count.textContent = items.length + ' / ' + target;
+        submit.disabled = items.length !== target || !form.elements.name.value.trim();
+        emptySelection.classList.toggle('hidden', items.length > 0);
+        selectedList.textContent = '';
+        hiddenSelections.textContent = '';
+
+        items.forEach(function (event) {
+            var item = document.createElement('li');
+            item.className = 'flex items-center gap-3 py-3';
+            var details = document.createElement('span');
+            details.className = 'min-w-0 flex-1';
+            var name = document.createElement('span');
+            name.className = 'block truncate font-semibold';
+            name.textContent = event.name;
+            var meta = document.createElement('span');
+            meta.className = 'block text-xs text-gray-400';
+            meta.textContent = [event.location, event.country].filter(Boolean).join(' · ');
+            details.append(name, meta);
+            var remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'px-2 py-1 text-gray-400 hover:text-white';
+            remove.textContent = 'Retirer';
+            remove.setAttribute('aria-label', 'Retirer ' + event.name + ' ' + event.year);
+            remove.addEventListener('click', function () {
+                selected.delete(keyFor(event));
+                updateSelection();
+                updateSearchButtons();
+            });
+            item.append(details, remove);
+            selectedList.appendChild(item);
+
+            var hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'events[]';
+            hidden.value = event.year + ':' + event.round;
+            hiddenSelections.appendChild(hidden);
+        });
+    }
+
+    function renderEvents(events) {
+        eventsList.textContent = '';
+        events.forEach(function (event) {
+            var row = document.createElement('div');
+            row.className = 'flex items-center gap-3 border-b border-f1-border py-3 text-sm';
+            var detail = document.createElement('span');
+            detail.className = 'min-w-0 flex-1';
+            var name = document.createElement('span');
+            name.className = 'block truncate font-medium';
+            name.textContent = event.name || 'Grand Prix';
+            var location = document.createElement('span');
+            location.className = 'block truncate text-xs text-gray-400';
+            location.textContent = [event.location, event.country].filter(Boolean).join(' · ');
+            detail.append(name, location);
+            var add = document.createElement('button');
+            add.type = 'button';
+            add.dataset.eventKey = keyFor(event);
+            add.className = 'rounded border border-f1-border px-3 py-2 text-xs font-semibold hover:border-white disabled:opacity-40';
+            add.textContent = selected.has(keyFor(event)) ? 'Ajoutée' : 'Ajouter';
+            add.disabled = selected.has(keyFor(event)) || selected.size >= (parseInt(raceCount.value, 10) || 0);
+            add.addEventListener('click', function () {
+                if (selected.size >= parseInt(raceCount.value, 10)) return;
+                selected.set(keyFor(event), event);
+                add.textContent = 'Ajoutée';
+                add.disabled = true;
+                updateSelection();
+                updateSearchButtons();
+            });
+            row.append(detail, add);
+            eventsList.appendChild(row);
+        });
+        status.textContent = events.length ? events.length + ' course(s) affichée(s), toutes années confondues.' : 'Aucune course trouvée.';
+        updateSelection();
+        updateSearchButtons();
+    }
+
+    function normalize(value) {
+        return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase();
+    }
+
+    function searchEvents() {
+        var currentRequest = ++requestNumber;
+        eventsList.textContent = '';
+        status.textContent = 'Chargement du catalogue FastF1…';
+        searchButton.disabled = true;
+
+        fetch(form.dataset.eventsUrl)
+            .then(function (response) {
+                return response.json().then(function (data) {
+                    if (!response.ok) throw new Error(data.error || 'Catalogue indisponible');
+                    return data;
+                });
+            })
+            .then(function (data) {
+                if (currentRequest !== requestNumber) return;
+                catalog = data.events;
+                searchButton.disabled = false;
+                filterEvents();
+            })
+            .catch(function (error) {
+                if (currentRequest !== requestNumber) return;
+                status.textContent = 'FastF1 indisponible : ' + error.message;
+                searchButton.disabled = false;
+            });
+    }
+
+    function filterEvents() {
+        var term = normalize(query.value.trim());
+        if (term && term.length < 2) {
+            eventsList.textContent = '';
+            status.textContent = 'Saisis au moins deux caractères pour filtrer.';
+            return;
+        }
+        var matches = term ? catalog.filter(function (event) {
+            return normalize([event.name, event.location, event.country, event.year].join(' ')).includes(term);
+        }) : catalog;
+        renderEvents(matches);
+    }
+
+    function updateSearchButtons() {
+        var full = selected.size >= (parseInt(raceCount.value, 10) || 0);
+        eventsList.querySelectorAll('button').forEach(function (button) {
+            var isSelected = selected.has(button.dataset.eventKey);
+            button.textContent = isSelected ? 'Ajoutée' : 'Ajouter';
+            button.disabled = isSelected || full;
+        });
+    }
+
+    searchButton.addEventListener('click', function () {
+        if (catalog.length) filterEvents();
+        else searchEvents();
+    });
+    query.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            filterEvents();
+        }
+    });
+    query.addEventListener('input', function () {
+        filterEvents();
+    });
+    raceCount.addEventListener('input', function () {
+        if (selected.size > (parseInt(raceCount.value, 10) || 0)) {
+            status.textContent = 'Retire des courses pour atteindre le nouveau nombre demandé.';
+        }
+        updateSelection();
+        updateSearchButtons();
+    });
+    form.elements.name.addEventListener('input', updateSelection);
+    form.addEventListener('submit', function (event) {
+        if (selected.size !== parseInt(raceCount.value, 10) || !form.elements.name.value.trim()) event.preventDefault();
+    });
+
+    updateSelection();
+    searchEvents();
+})();
+</script>
+{% endblock %}

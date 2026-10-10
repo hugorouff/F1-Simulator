@@ -1,0 +1,19 @@
+/vendor/
+.env.local
+.phpunit.result.cache
+/var/
+/python/f1-race-replay/.fastf1-cache/
+/python/f1-race-replay/computed_data/
+/python/f1-race-replay/venv/
+/python/f1-race-replay/__pycache__/
+*.pyc
+
+###> symfony/framework-bundle ###
+/.env.local
+/.env.local.php
+/.env.*.local
+/config/secrets/prod/prod.decrypt.private.php
+/public/bundles/
+/var/
+/vendor/
+###< symfony/framework-bundle ###

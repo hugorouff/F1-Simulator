@@ -1,0 +1,24 @@
+{
+  "name": "F1 Simulator",
+  "short_name": "F1 Sim",
+  "description": "Simulateur de Formule 1 interactif et gestion de roster",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#15151e",
+  "theme_color": "#e10600",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "https://upload.wikimedia.org/wikipedia/commons/3/33/F1.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://upload.wikimedia.org/wikipedia/commons/3/33/F1.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+[
+    {
+        "id": "red-bull",
+        "name": "Red Bull Racing",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 6,
+        "active": true
+    },
+    {
+        "id": "mercedes",
+        "name": "Mercedes F1 Team",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 8,
+        "active": true
+    },
+    {
+        "id": "ferrari",
+        "name": "Scuderia Ferrari",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 16,
+        "active": true
+    },
+    {
+        "id": "mclaren",
+        "name": "McLaren F1 Team",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 8,
+        "active": true
+    },
+    {
+        "id": "aston-martin",
+        "name": "Aston Martin F1 Team",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 0,
+        "active": true
+    },
+    {
+        "id": "alpine",
+        "name": "Alpine F1 Team",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 2,
+        "active": true
+    },
+    {
+        "id": "williams",
+        "name": "Williams F1 Team",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 9,
+        "active": true
+    },
+    {
+        "id": "rb",
+        "name": "Scuderia Alpha Tauri \/ RB",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 0,
+        "active": true
+    },
+    {
+        "id": "stake-sauber",
+        "name": "Stake F1 Team Sauber",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 0,
+        "active": true
+    },
+    {
+        "id": "haas",
+        "name": "Haas F1 Team",
+        "division": "F1",
+        "car_condition": 100,
+        "constructor_titles": 0,
+        "active": true
+    },
+    {
+        "id": "cadillac-f1-team",
+        "name": "Cadillac F1 Team",
+        "division": "F2",
+        "car_condition": 100,
+        "constructor_titles": 0,
+        "active": true
+    }
+]

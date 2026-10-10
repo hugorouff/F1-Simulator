@@ -1,0 +1,107 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Simulateur F1 - {{ selected_gp }} {{ selected_year }}{% endblock %}
+
+{% block body %}
+<div class="mb-8 border-l-4 border-f1-red pl-4">
+    <h2 class="text-2xl sm:text-3xl font-extrabold uppercase tracking-wide">
+        {{ event_name ?? (selected_gp ~ ' ' ~ selected_year) }}
+    </h2>
+    <p class="text-gray-400 text-sm mt-1">
+        {{ sessions[selected_session] ?? selected_session }} · {{ selected_year }}
+    </p>
+</div>
+
+<div class="bg-f1-card p-4 sm:p-6 rounded-xl border border-f1-border mb-8 shadow-lg">
+    <form method="GET" action="{{ path('app_simulator') }}" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div>
+            <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Saison</label>
+            <select name="year" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
+                {% for y in years %}
+                    <option value="{{ y }}" {{ selected_year == y ? 'selected' }}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Grand Prix</label>
+            <select name="grand_prix" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
+                {% for gp in grands_prix %}
+                    <option value="{{ gp }}" {{ selected_gp == gp ? 'selected' }}>{{ gp }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Session</label>
+            <select name="session" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
+                {% for code, label in sessions %}
+                    <option value="{{ code }}" {{ selected_session == code ? 'selected' }}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="flex items-end">
+            <button type="submit" id="load-btn" class="w-full bg-f1-red hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition uppercase text-sm tracking-wider">
+                Charger
+            </button>
+        </div>
+    </form>
+    <p id="loading" class="hidden text-sm text-gray-400 mt-4">
+        Chargement des données… le premier appel d'une session peut prendre jusqu'à 2 minutes.
+    </p>
+</div>
+
+{% if error %}
+    <div class="bg-red-950/50 border border-f1-red text-red-200 rounded-xl p-4 mb-8 text-sm">
+        {{ error }}
+    </div>
+{% endif %}
+
+<div class="bg-f1-card rounded-xl border border-f1-border overflow-hidden shadow-xl">
+    <div class="px-4 sm:px-6 py-4 border-b border-f1-border">
+        <h3 class="font-bold text-lg">Classement</h3>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm">
+            <thead class="bg-f1-dark text-gray-400 uppercase text-xs tracking-wider border-b border-f1-border">
+                <tr>
+                    <th class="py-3 px-4 sm:px-6">Pos</th>
+                    <th class="py-3 px-4 sm:px-6">N°</th>
+                    <th class="py-3 px-4 sm:px-6">Pilote</th>
+                    <th class="py-3 px-4 sm:px-6">Écurie</th>
+                    <th class="py-3 px-4 sm:px-6">Temps / Statut</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-f1-border">
+                {% for driver in drivers %}
+                    <tr class="hover:bg-f1-dark/50 transition">
+                        <td class="py-3 px-4 sm:px-6 font-bold {{ driver.position is not null and driver.position <= 3 ? 'text-f1-red' : 'text-gray-300' }}">
+                            {{ driver.position is not null ? 'P' ~ driver.position : 'NC' }}
+                        </td>
+                        <td class="py-3 px-4 sm:px-6 font-mono text-gray-400">{{ driver.number }}</td>
+                        <td class="py-3 px-4 sm:px-6 font-semibold whitespace-nowrap">
+                            {{ driver.name }}
+                            <span class="text-xs text-gray-500">{{ driver.code }}</span>
+                        </td>
+                        <td class="py-3 px-4 sm:px-6 text-gray-300 whitespace-nowrap">{{ driver.team }}</td>
+                        <td class="py-3 px-4 sm:px-6 font-mono whitespace-nowrap">
+                            {{ driver.time ?? driver.status }}
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr>
+                        <td colspan="5" class="py-8 text-center text-gray-400">
+                            Aucune donnée à afficher.
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    document.querySelector('form').addEventListener('submit', function () {
+        document.getElementById('loading').classList.remove('hidden');
+        document.getElementById('load-btn').classList.add('opacity-50');
+    });
+</script>
+{% endblock %}

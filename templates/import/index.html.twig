@@ -1,0 +1,144 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Imports et Création · F1 Simulator{% endblock %}
+
+{% block body %}
+<section class="mb-8 border-b border-f1-border pb-5">
+    <p class="text-xs font-semibold uppercase text-f1-red">Gestion du Championnat</p>
+    <h1 class="mt-1 text-3xl font-extrabold">Imports JSON & Création Directe</h1>
+    <p class="mt-2 text-sm text-gray-400">
+        {{ drivers }} pilotes · {{ teams }} écuries actuellement enregistrés dans la base. 
+        Règle stricte : 1 écurie = 2 pilotes maximum.
+    </p>
+</section>
+
+{% for message in app.flashes('success') %}
+    <p class="mb-4 border-l-4 border-green-500 bg-f1-card px-4 py-3 text-sm text-green-200">{{ message }}</p>
+{% endfor %}
+{% for message in app.flashes('error') %}
+    <p class="mb-4 border-l-4 border-f1-red bg-f1-card px-4 py-3 text-sm text-red-200">{{ message }}</p>
+{% endfor %}
+
+<div class="grid gap-8 lg:grid-cols-2 mb-12">
+    <!-- SECTION 1 : PILOTES (Import & Création) -->
+    <div class="bg-f1-card p-6 rounded-xl border border-f1-border space-y-8">
+        <div>
+            <h2 class="text-xl font-bold mb-1">Pilotes</h2>
+            <p class="text-sm text-gray-400 mb-4">Importe un tableau JSON complet ou ajoute un pilote individuellement.</p>
+            
+            <!-- Formulaire d'import JSON Pilotes -->
+            <form method="post" action="{{ path('app_import_drivers') }}" enctype="multipart/form-data" class="space-y-3 pb-6 border-b border-f1-border">
+                <input type="hidden" name="_token" value="{{ csrf_token('import_drivers') }}">
+                <label class="block text-xs font-semibold uppercase text-gray-400">Importer via fichier JSON</label>
+                <input type="file" name="json_file" accept=".json,application/json" required class="block w-full text-sm text-gray-300 file:mr-4 file:border-0 file:bg-f1-dark file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white">
+                <button type="submit" class="w-full rounded bg-f1-red px-4 py-2.5 text-sm font-bold uppercase text-white hover:bg-red-700">Importer les pilotes (JSON)</button>
+            </form>
+        </div>
+
+        <!-- Formulaire de Création Directe d'un Pilote -->
+        <div>
+            <h3 class="text-base font-bold mb-3">Ou créer un pilote en direct</h3>
+            <form method="post" action="{{ path('app_roster_add_driver') }}" class="space-y-4">
+                <input type="hidden" name="_token" value="{{ csrf_token('add_driver') }}">
+                
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Nom complet</label>
+                        <input type="text" name="name" required placeholder="ex: Hugo Rouff" class="w-full bg-f1-dark border border-f1-border rounded p-2.5 text-sm text-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Nationalité</label>
+                        <input type="text" name="nationality" placeholder="ex: Français" class="w-full bg-f1-dark border border-f1-border rounded p-2.5 text-sm text-white">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Écurie d'affectation</label>
+                    <select name="team_id" class="w-full bg-f1-dark border border-f1-border rounded p-2.5 text-sm text-white">
+                        <option value="">Aucune (Agent libre)</option>
+                        {% for team in ecuriesList|default([]) %}
+                            <option value="{{ team.id }}">{{ team.name }} ({{ team.division }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="grid grid-cols-3 gap-2">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Âge</label>
+                        <input type="number" name="age" value="22" class="w-full bg-f1-dark border border-f1-border rounded p-2 text-sm text-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Victoires</label>
+                        <input type="number" name="career_wins" value="0" class="w-full bg-f1-dark border border-f1-border rounded p-2 text-sm text-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Titres</label>
+                        <input type="number" name="championships" value="0" class="w-full bg-f1-dark border border-f1-border rounded p-2 text-sm text-white">
+                    </div>
+                </div>
+
+                <button type="submit" class="w-full border border-f1-border hover:border-white text-white font-bold py-2.5 px-4 rounded text-sm uppercase">
+                    Créer le pilote
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- SECTION 2 : ÉCURIES (Import & Création) -->
+    <div class="bg-f1-card p-6 rounded-xl border border-f1-border space-y-8">
+        <div>
+            <h2 class="text-xl font-bold mb-1">Écuries</h2>
+            <p class="text-sm text-gray-400 mb-4">Importe un fichier JSON d'écuries ou ajoute-en une directement.</p>
+
+            <!-- Formulaire d'import JSON Écuries -->
+            <form method="post" action="{{ path('app_import_teams') }}" enctype="multipart/form-data" class="space-y-3 pb-6 border-b border-f1-border">
+                <input type="hidden" name="_token" value="{{ csrf_token('import_teams') }}">
+                <div>
+                    <label class="block text-xs font-semibold uppercase text-gray-400 mb-1">Division par défaut (optionnel)</label>
+                    <select name="division_id" class="w-full bg-f1-dark border border-f1-border rounded p-2.5 text-sm text-white">
+                        <option value="0">Utiliser le champ division du JSON</option>
+                        {% for division in divisions %}
+                            <option value="{{ division.id }}">{{ division.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <input type="file" name="json_file" accept=".json,application/json" required class="block w-full text-sm text-gray-300 file:mr-4 file:border-0 file:bg-f1-dark file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white">
+                <button type="submit" class="w-full rounded border border-f1-border px-4 py-2.5 text-sm font-bold uppercase text-white hover:border-white">Importer les écuries (JSON)</button>
+            </form>
+        </div>
+
+        <!-- Formulaire de Création Directe d'une Écurie -->
+        <div>
+            <h3 class="text-base font-bold mb-3">Ou créer une écurie en direct</h3>
+            <form method="post" action="{{ path('app_roster_add_team') }}" class="space-y-4">
+                <input type="hidden" name="_token" value="{{ csrf_token('add_team') }}">
+                
+                <div>
+                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Nom de l'écurie</label>
+                    <input type="text" name="name" required placeholder="ex: Aston Martin F1 Team" class="w-full bg-f1-dark border border-f1-border rounded p-2.5 text-sm text-white">
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Division</label>
+                        <select name="division" class="w-full bg-f1-dark border border-f1-border rounded p-2.5 text-sm text-white">
+                            <option value="F1">F1</option>
+                            <option value="F2">F2</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Titres constructeurs</label>
+                        <input type="number" name="constructor_titles" value="0" min="0" class="w-full bg-f1-dark border border-f1-border rounded p-2.5 text-sm text-white">
+                    </div>
+                </div>
+
+                <button type="submit" class="w-full rounded bg-f1-red hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded text-sm uppercase">
+                    Créer l'écurie
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<p class="text-sm text-gray-500">Les modifications s'appliquent immédiatement sur les fichiers <code>data/pilotes.json</code> et <code>data/ecuries.json</code> utilisés par le simulateur.</p>
+{% endblock %}
