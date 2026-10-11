@@ -2,200 +2,166 @@
 
 namespace App\Service;
 
-use App\Entity\Division;
-use App\Entity\Engagement;
-use App\Entity\Saison;
-use App\Entity\SaisonEngagementDivision;
-use Doctrine\ORM\EntityManagerInterface;
 use RuntimeException;
 
 final class SeasonPromotionService
 {
-    public function __construct(private readonly EntityManagerInterface $entityManager)
+    public function __construct(private readonly SeasonJsonStore $store)
     {
     }
 
     /** @return list<array{division:string,level:int,teams:list<array{rank:int,name:string,points:float,wins:int,podiums:int}>}> */
-    public function standings(Saison $season): array
+    public function standings(array $season): array
     {
-        $groups = $this->buildStandings($season, false);
         $output = [];
-        foreach ($groups as $teams) {
-            if ($teams === []) {
-                continue;
-            }
-            $division = $teams[0]['division'];
+        foreach ($this->groups($season, false) as $group) {
             $rows = [];
-            foreach (array_values($teams) as $index => $team) {
+            foreach ($group['teams'] as $i => $team) {
                 $rows[] = [
-                    'rank' => $index + 1,
-                    'name' => $team['team']->getNom(),
+                    'rank' => $i + 1,
+                    'name' => $team['name'],
                     'points' => $team['points'],
                     'wins' => $team['wins'],
                     'podiums' => $team['podiums'],
                 ];
             }
-            $output[] = ['division' => $division->getNom(), 'level' => $division->getNiveau(), 'teams' => $rows];
+            $output[] = ['division' => $group['division']['nom'], 'level' => $group['division']['niveau'], 'teams' => $rows];
         }
-
-        usort($output, static fn (array $left, array $right): int => $left['level'] <=> $right['level']);
+        usort($output, static fn (array $a, array $b): int => $a['level'] <=> $b['level']);
 
         return $output;
     }
 
-    /** @return array{promoted:list<array{team:string,from:string,to:string}>,relegated:list<array{team:string,from:string,to:string}>} */
-    public function close(Saison $season): array
+    /**
+     * @return array{promoted:list<array>,relegated:list<array>}
+     */
+    public function close(array &$season): array
     {
-        if ($season->getStatut() === 'terminee') {
+        if (($season['statut'] ?? '') === 'terminee') {
             throw new RuntimeException('Cette saison est déjà terminée.');
         }
 
-        $groups = $this->buildStandings($season, true);
-        $divisions = $this->entityManager->getRepository(Division::class)->findBy([], ['niveau' => 'ASC']);
-        $divisionByLevel = [];
-        foreach ($divisions as $division) {
-            $divisionByLevel[$division->getNiveau()] = $division;
-        }
-
-        foreach ($groups as $teams) {
-            if ($teams === []) {
-                continue;
-            }
-            if (count($teams) < 4) {
+        $groups = $this->groups($season, true);
+        foreach ($groups as $group) {
+            if (count($group['teams']) < 4) {
                 throw new RuntimeException(sprintf(
                     'La division %s doit avoir au moins quatre écuries pour appliquer les deux montées/descentes.',
-                    $teams[0]['division']->getNom(),
+                    $group['division']['nom'],
                 ));
             }
         }
 
-        $this->saveDivisionSnapshots($season);
+        $byLevel = [];
+        foreach ($this->store->divisions() as $division) {
+            $byLevel[$division['niveau']] = $division;
+        }
+
+        $rawTeams = $this->store->rawTeams();
+        $setDivision = static function (string $teamId, string $divisionName) use (&$rawTeams): void {
+            foreach ($rawTeams as &$team) {
+                if (($team['id'] ?? null) === $teamId) {
+                    $team['division'] = $divisionName;
+                }
+            }
+        };
 
         $promoted = [];
         $relegated = [];
-        foreach ($groups as $teams) {
-            if ($teams === []) {
-                continue;
-            }
-            $division = $teams[0]['division'];
-            $level = $division->getNiveau();
+        foreach ($groups as $group) {
+            $division = $group['division'];
+            $level = $division['niveau'];
 
-            if ($level > 1 && isset($divisionByLevel[$level - 1])) {
-                foreach (array_slice($teams, 0, 2) as $standing) {
-                    $target = $divisionByLevel[$level - 1];
-                    $standing['team']->setDivision($target);
-                    $promoted[] = ['team' => $standing['team']->getNom(), 'from' => $division->getNom(), 'to' => $target->getNom()];
+            if ($level > 1 && isset($byLevel[$level - 1])) {
+                $target = $byLevel[$level - 1];
+                foreach (array_slice($group['teams'], 0, 2) as $team) {
+                    $setDivision($team['id'], $target['nom']);
+                    $promoted[] = ['team' => $team['name'], 'from' => $division['nom'], 'to' => $target['nom']];
                 }
             }
-
-            if (isset($divisionByLevel[$level + 1])) {
-                foreach (array_slice($teams, -2) as $standing) {
-                    $target = $divisionByLevel[$level + 1];
-                    $standing['team']->setDivision($target);
-                    $relegated[] = ['team' => $standing['team']->getNom(), 'from' => $division->getNom(), 'to' => $target->getNom()];
+            if (isset($byLevel[$level + 1])) {
+                $target = $byLevel[$level + 1];
+                foreach (array_slice($group['teams'], -2) as $team) {
+                    $setDivision($team['id'], $target['nom']);
+                    $relegated[] = ['team' => $team['name'], 'from' => $division['nom'], 'to' => $target['nom']];
                 }
             }
         }
 
-        $season->setStatut('terminee');
-        $this->entityManager->flush();
+        $this->store->saveRawTeams($rawTeams);
+        $season['statut'] = 'terminee';
 
         return ['promoted' => $promoted, 'relegated' => $relegated];
     }
 
-    /** @return array<int,list<array{team:object,division:Division,points:float,wins:int,podiums:int,results:int,entries:int}>> */
-    private function buildStandings(Saison $season, bool $requireComplete): array
+    /**
+     * @return list<array{division:array,teams:list<array>}>
+     */
+    private function groups(array $season, bool $requireComplete): array
     {
-        $races = $season->getCourses()->toArray();
+        $races = $season['courses'] ?? [];
         if ($races === []) {
-            throw new RuntimeException('La saison ne contient aucune course.');
-        }
-
-        $standings = [];
-        foreach ($this->entityManager->getRepository(Engagement::class)->findBy(['saison' => $season]) as $entry) {
-            if ($entry->getStatut() !== 'actif') {
-                continue;
-            }
-            $team = $entry->getEcurie();
-            $snapshot = $this->entityManager->getRepository(SaisonEngagementDivision::class)->findOneBy(['engagement' => $entry]);
-            $division = $snapshot?->getDivision() ?? $team?->getDivision();
-            if ($team === null || $division === null) {
-                continue;
-            }
-
-            $teamId = $team->getId();
-            $divisionId = $division->getId();
-            $standings[$divisionId][$teamId] ??= [
-                'team' => $team,
-                'division' => $division,
-                'points' => 0.0,
-                'wins' => 0,
-                'podiums' => 0,
-                'results' => 0,
-                'entries' => 0,
-            ];
-            ++$standings[$divisionId][$teamId]['entries'];
-
-            foreach ($entry->getResultats() as $result) {
-                if ($result->getCourse()?->getSaison()?->getId() !== $season->getId()) {
-                    continue;
-                }
-                $standings[$divisionId][$teamId]['points'] += $result->getPoints();
-                ++$standings[$divisionId][$teamId]['results'];
-                if ($result->getPosition() === 1) {
-                    ++$standings[$divisionId][$teamId]['wins'];
-                }
-                if ($result->getPosition() !== null && $result->getPosition() <= 3) {
-                    ++$standings[$divisionId][$teamId]['podiums'];
-                }
-            }
-        }
-
-        if ($standings === []) {
             if ($requireComplete) {
-                throw new RuntimeException('Aucune écurie engagée ne permet d’établir le classement final.');
+                throw new RuntimeException('La saison ne contient aucune course.');
             }
 
             return [];
         }
 
-        foreach ($standings as &$teams) {
-            foreach ($teams as $standing) {
-                $expectedResults = $standing['entries'] * count($races);
-                if ($requireComplete && $standing['results'] < $expectedResults) {
-                    throw new RuntimeException(sprintf(
-                        'La saison est incomplète : %s a %d résultats sur %d attendus.',
-                        $standing['team']->getNom(),
-                        $standing['results'],
-                        $expectedResults,
-                    ));
+        $divisions = [];
+        foreach ($this->store->divisions() as $division) {
+            $divisions[$division['id']] = $division;
+        }
+        $teams = $this->store->teams();
+
+        $groups = [];
+        foreach ($season['engagements'] ?? [] as $entry) {
+            $teamId = $entry['ecurie_id'] ?? null;
+            $division = $divisions[$entry['division_id'] ?? 0] ?? null;
+            if ($teamId === null || $division === null || !isset($teams[$teamId])) {
+                continue;
+            }
+
+            $row = ['id' => $teamId, 'name' => $teams[$teamId]['nom'], 'points' => 0.0, 'wins' => 0, 'podiums' => 0, 'results' => 0];
+            foreach ($races as $race) {
+                foreach ($race['resultats'] ?? [] as $result) {
+                    if (($result['ecurie_id'] ?? null) !== $teamId) {
+                        continue;
+                    }
+                    $row['points'] += (float) ($result['points'] ?? 0);
+                    ++$row['results'];
+                    $position = $result['position'] ?? null;
+                    if ($position === 1) {
+                        ++$row['wins'];
+                    }
+                    if ($position !== null && $position <= 3) {
+                        ++$row['podiums'];
+                    }
                 }
             }
 
-            uasort($teams, static fn (array $left, array $right): int =>
-                [$right['points'], $right['wins'], $right['podiums'], $left['team']->getNom()]
-                <=> [$left['points'], $left['wins'], $left['podiums'], $right['team']->getNom()]
-            );
-        }
-        unset($teams);
-
-        return $standings;
-    }
-
-    private function saveDivisionSnapshots(Saison $season): void
-    {
-        $repository = $this->entityManager->getRepository(SaisonEngagementDivision::class);
-        foreach ($this->entityManager->getRepository(Engagement::class)->findBy(['saison' => $season]) as $entry) {
-            if ($entry->getStatut() !== 'actif' || $repository->findOneBy(['engagement' => $entry]) !== null) {
-                continue;
+            $expected = count($entry['pilotes'] ?? []) * count($races);
+            if ($requireComplete && $row['results'] < $expected) {
+                throw new RuntimeException(sprintf(
+                    'La saison est incomplète : %s a %d résultats sur %d attendus.',
+                    $row['name'], $row['results'], $expected,
+                ));
             }
-            $division = $entry->getEcurie()?->getDivision();
-            if ($division === null) {
-                continue;
-            }
-            $this->entityManager->persist((new SaisonEngagementDivision())
-                ->setEngagement($entry)
-                ->setDivision($division));
+
+            $groups[$division['id']]['division'] = $division;
+            $groups[$division['id']]['teams'][] = $row;
         }
+
+        if ($groups === [] && $requireComplete) {
+            throw new RuntimeException('Aucune écurie engagée ne permet d’établir le classement final.');
+        }
+
+        foreach ($groups as &$group) {
+            usort($group['teams'], static fn (array $a, array $b): int =>
+                [$b['points'], $b['wins'], $b['podiums'], $a['name']]
+                <=> [$a['points'], $a['wins'], $a['podiums'], $b['name']]);
+        }
+        unset($group);
+
+        return array_values($groups);
     }
 }
