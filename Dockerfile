@@ -1,15 +1,18 @@
-FROM php:8.2-apache
+FROM php:8.4-apache
 
-# Installation des dépendances système, Python et Pip
+# Installation des dépendances système, Python, Pip et extensions PHP requises (dont gd)
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     libicu-dev \
     libzip-dev \
+    libpng-dev \
+    libjpeg-dev \
     zip \
     unzip \
     git \
-    && docker-php-ext-install pdo pdo_mysql intl zip
+    && docker-php-ext-configure gd --with-jpeg \
+    && docker-php-ext-install pdo pdo_mysql intl zip gd
 
 # Installation de Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
