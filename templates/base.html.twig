@@ -36,16 +36,41 @@
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
-    <nav class="bg-f1-card border-b border-f1-border px-4 sm:px-6 py-4 flex justify-between items-center">
-        <a href="{{ path('app_home') }}" class="flex items-center gap-3">
-            <span class="bg-f1-red text-white font-black px-3 py-1 rounded text-xl italic tracking-wider">F1</span>
-            <span class="text-xl font-bold tracking-tight">SIMULATOR</span>
-        </a>
-        <div class="flex items-center gap-4 text-sm">
-            <a href="{{ path('app_seasons') }}" class="text-gray-300 hover:text-white">Saisons</a>
-            <a href="{{ path('app_import') }}" class="text-gray-300 hover:text-white">Imports JSON</a>
-            <a href="{{ path('app_replay') }}" class="text-gray-300 hover:text-white">Simulation</a>
-            <a href="{{ path('app_simulator') }}" class="text-gray-300 hover:text-white">Résultats FastF1</a>
+
+    <!-- Navbar Responsive -->
+    <nav class="bg-f1-card border-b border-f1-border relative z-50">
+        <div class="px-4 sm:px-6 py-4 flex justify-between items-center">
+            <!-- Logo -->
+            <a href="{{ path('app_home') }}" class="flex items-center gap-3">
+                <span class="bg-f1-red text-white font-black px-3 py-1 rounded text-xl italic tracking-wider">F1</span>
+                <span class="text-xl font-bold tracking-tight">SIMULATOR</span>
+            </a>
+
+            <!-- Bouton Burger (Mobile uniquement) -->
+            <button id="mobile-menu-btn" class="md:hidden text-gray-300 hover:text-white focus:outline-none p-2 rounded-lg hover:bg-f1-border/50">
+                <svg id="menu-icon-open" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                </svg>
+                <svg id="menu-icon-close" class="w-6 h-6 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+            </button>
+
+            <!-- Navigation Bureau (md+) -->
+            <div class="hidden md:flex items-center gap-6 text-sm font-medium">
+                <a href="{{ path('app_seasons') }}" class="text-gray-300 hover:text-f1-red transition-colors">Saisons</a>
+                <a href="{{ path('app_import') }}" class="text-gray-300 hover:text-f1-red transition-colors">Imports JSON</a>
+                <a href="{{ path('app_replay') }}" class="text-gray-300 hover:text-f1-red transition-colors">Simulation</a>
+                <a href="{{ path('app_simulator') }}" class="text-gray-300 hover:text-f1-red transition-colors">Résultats FastF1</a>
+            </div>
+        </div>
+
+        <!-- Navigation Mobile (Déroulante) -->
+        <div id="mobile-menu" class="hidden md:hidden border-t border-f1-border bg-f1-card px-4 py-3 flex flex-col gap-3 text-base font-medium">
+            <a href="{{ path('app_seasons') }}" class="text-gray-300 hover:text-white hover:bg-f1-border/40 px-3 py-2 rounded-lg transition-colors">Saisons</a>
+            <a href="{{ path('app_import') }}" class="text-gray-300 hover:text-white hover:bg-f1-border/40 px-3 py-2 rounded-lg transition-colors">Imports JSON</a>
+            <a href="{{ path('app_replay') }}" class="text-gray-300 hover:text-white hover:bg-f1-border/40 px-3 py-2 rounded-lg transition-colors">Simulation</a>
+            <a href="{{ path('app_simulator') }}" class="text-gray-300 hover:text-white hover:bg-f1-border/40 px-3 py-2 rounded-lg transition-colors">Résultats FastF1</a>
         </div>
     </nav>
 
@@ -57,8 +82,23 @@
         F1 Simulator
     </footer>
 
-    <!-- PWA Service Worker Registration -->
+    <!-- JS Burger Menu & Service Worker -->
     <script>
+        // Gestion du Menu Burger Mobile
+        const menuBtn = document.getElementById('mobile-menu-btn');
+        const mobileMenu = document.getElementById('mobile-menu');
+        const iconOpen = document.getElementById('menu-icon-open');
+        const iconClose = document.getElementById('menu-icon-close');
+
+        if (menuBtn) {
+            menuBtn.addEventListener('click', () => {
+                mobileMenu.classList.toggle('hidden');
+                iconOpen.classList.toggle('hidden');
+                iconClose.classList.toggle('hidden');
+            });
+        }
+
+        // PWA Service Worker Registration
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js')
