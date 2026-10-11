@@ -70,7 +70,24 @@
     </div>
     <div id="hidden-selections"></div>
 </form>
-
+<section class="mb-8 border-y border-f1-border py-5">
+    <div class="mb-4">
+        <p class="text-xs font-semibold uppercase text-f1-red">Sauvegarde</p>
+        <h2 class="mt-1 text-lg font-bold">Importer une saison (JSON)</h2>
+        <p class="mt-1 text-sm text-gray-400">Fichier obtenu via « Télécharger JSON ». Il est enregistré dans <code>data/saisons/</code>.</p>
+    </div>
+    <form method="post" action="{{ path('app_season_import') }}" enctype="multipart/form-data"
+          class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end">
+        <input type="hidden" name="_token" value="{{ csrf_token('import_season') }}">
+        <input type="file" name="json_file" accept=".json,application/json" required
+               class="block w-full text-sm text-gray-300 file:mr-4 file:border-0 file:bg-f1-card file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white">
+        <label class="flex items-center gap-2 text-xs text-gray-300">
+            <input type="checkbox" name="replace" value="1" class="accent-red-600">
+            Remplacer si le même n° existe
+        </label>
+        <button type="submit" class="rounded bg-f1-red px-4 py-3 text-xs font-bold uppercase text-white hover:bg-red-700">Importer la saison</button>
+    </form>
+</section>
 <section class="mb-10 border-y border-f1-border py-5">
     <div class="mb-4">
         <p class="text-xs font-semibold uppercase text-f1-red">Pyramide sportive</p>
