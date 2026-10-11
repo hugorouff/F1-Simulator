@@ -32,4 +32,9 @@ COPY . .
 RUN composer install --no-dev --optimize-autoloader --no-scripts
 RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt --break-system-packages; fi
 
+# Vandage et réchauffement du cache Symfony pour la prod
+ENV APP_ENV=prod
+ENV APP_SECRET=123456789abcdef
+RUN php bin/console cache:clear --no-warmup
+
 EXPOSE 80
