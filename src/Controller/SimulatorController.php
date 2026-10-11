@@ -2,10 +2,10 @@
 
 namespace App\Controller;
 
+use App\Service\PythonRunner;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\Process\Process;
 use Symfony\Component\Routing\Attribute\Route;
 
 class SimulatorController extends AbstractController
@@ -27,11 +27,11 @@ class SimulatorController extends AbstractController
     ];
 
     #[Route('/simulator', name: 'app_simulator', methods: ['GET'])]
-    public function index(Request $request): Response
+    public function index(Request $request, PythonRunner $python): Response
     {
         set_time_limit(300);
 
-        $year = $request->query->getInt('year', 2020);
+        $year = $request->query->getInt('year', 2023);
         $grandPrix = trim((string) $request->query->get('grand_prix', 'Monza'));
         $sessionType = strtoupper((string) $request->query->get('session', 'R'));
 
@@ -48,39 +48,21 @@ class SimulatorController extends AbstractController
         }
 
         if (!$error) {
-            $projectDir = $this->getParameter('kernel.project_dir');
-            $isWindows = str_starts_with(PHP_OS, 'WIN');
-            $python = $projectDir . ($isWindows
-                ? '/python/venv/Scripts/python.exe'
-                : '/python/venv/bin/python3');
-            $script = $projectDir . '/scripts/get_f1_data.py';
+            try {
+                // PythonRunner : venv local s'il existe, sinon python3 système (Render)
+                $output = $python->run('get_f1_data.py', [(string) $year, $grandPrix, $sessionType], 240);
+                $result = json_decode($output, true);
 
-            if (!is_file($python)) {
-                $error = 'Python introuvable : ' . $python;
-            } elseif (!is_file($script)) {
-                $error = 'Script introuvable : ' . $script;
-            } else {
-                $process = new Process([$python, $script, (string) $year, $grandPrix, $sessionType]);
-                $process->setTimeout(240);
-
-                try {
-                    $process->run();
-                } catch (\Throwable $e) {
-                    $error = 'Le chargement a dépassé le délai : ' . $e->getMessage();
+                if (!is_array($result)) {
+                    $error = 'Erreur Python : sortie invalide (' . mb_substr(trim($output), 0, 300) . ')';
+                } elseif (($result['status'] ?? null) !== 'success') {
+                    $error = 'FastF1 : ' . ($result['message'] ?? 'erreur inconnue');
+                } else {
+                    $drivers = $result['data'] ?? [];
+                    $eventName = $result['event'] ?? null;
                 }
-
-                if (!$error) {
-                    $result = json_decode($process->getOutput(), true);
-
-                    if (!$process->isSuccessful() || !is_array($result)) {
-                        $error = 'Erreur Python : ' . trim($process->getErrorOutput() ?: 'sortie invalide');
-                    } elseif (($result['status'] ?? null) !== 'success') {
-                        $error = 'FastF1 : ' . ($result['message'] ?? 'erreur inconnue');
-                    } else {
-                        $drivers = $result['data'];
-                        $eventName = $result['event'] ?? null;
-                    }
-                }
+            } catch (\Throwable $e) {
+                $error = $e->getMessage();
             }
         }
 

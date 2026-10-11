@@ -53,7 +53,8 @@ def get_session_data(year, grand_prix, session_type):
                 "time": format_time(driver["Time"]),
             })
 
-        return {"status": "success", "data": results}
+        event = str(session.event["EventName"]) if "EventName" in session.event else None
+        return {"status": "success", "event": event, "data": results}
     except Exception as exc:  # message renvoyé au contrôleur
         return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
 
