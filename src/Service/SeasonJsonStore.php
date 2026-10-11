@@ -2,9 +2,6 @@
 
 namespace App\Service;
 
-use App\Entity\Saison;
-use App\Entity\SaisonEngagementDivision;
-use Doctrine\ORM\EntityManagerInterface;
 use RuntimeException;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -12,103 +9,129 @@ final class SeasonJsonStore
 {
     public function __construct(
         #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
-        private readonly EntityManagerInterface $entityManager,
     ) {
     }
 
-    /** @param array<string,mixed> $extra */
-    public function save(Saison $season, array $extra = []): string
+    private function dataDir(): string
     {
-        $directory = $this->projectDir . '/data/saisons';
-        $path = $directory . '/' . $season->getId() . '.json';
-        $existing = is_file($path) ? json_decode((string) file_get_contents($path), true) : [];
+        return $this->projectDir . '/data';
+    }
 
-        $courses = [];
-        foreach ($season->getCourses() as $course) {
-            $circuit = $course->getCircuit();
-            $results = [];
-            foreach ($course->getResultats() as $result) {
-                $entry = $result->getEngagement();
-                $pilot = $entry?->getPilote();
-                $team = $entry?->getEcurie();
-                $snapshot = $entry ? $this->entityManager->getRepository(SaisonEngagementDivision::class)->findOneBy(['engagement' => $entry]) : null;
-                $results[] = [
-                    'driver' => $pilot ? trim($pilot->getPrenom() . ' ' . $pilot->getNom()) : null,
-                    'team' => $team?->getNom(),
-                    'division' => ($snapshot?->getDivision() ?? $team?->getDivision())?->getNom(),
-                    'position' => $result->getPosition(),
-                    'points' => $result->getPoints(),
-                    'dnf' => $result->isDnf(),
-                    'laps' => $result->getNombreTours(),
-                    'time_seconds' => $result->getTempsCourse(),
-                    'fastest_lap' => $result->isTourLePlusRapide(),
-                    'retirement_reason' => $result->getCauseAbandon(),
-                ];
+    private function read(string $path): array
+    {
+        $data = is_file($path) ? json_decode((string) file_get_contents($path), true) : [];
+
+        return is_array($data) ? $data : [];
+    }
+
+    private function write(string $path, array $data): void
+    {
+        $dir = dirname($path);
+        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new RuntimeException('Impossible de créer le dossier ' . $dir);
+        }
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+        if (file_put_contents($path, $json, LOCK_EX) === false) {
+            throw new RuntimeException('Impossible d’écrire ' . basename($path));
+        }
+    }
+
+    /** @return list<array{id:int,nom:string,niveau:int}> */
+    public function divisions(): array
+    {
+        $divisions = $this->read($this->dataDir() . '/divisions.json');
+        usort($divisions, static fn (array $a, array $b): int => $a['niveau'] <=> $b['niveau']);
+
+        return array_values($divisions);
+    }
+
+    public function saveDivisions(array $divisions): void
+    {
+        $this->write($this->dataDir() . '/divisions.json', array_values($divisions));
+    }
+
+    /** Écuries telles qu'écrites dans ecuries.json */
+    public function rawTeams(): array
+    {
+        return $this->read($this->dataDir() . '/ecuries.json');
+    }
+
+    public function saveRawTeams(array $teams): void
+    {
+        $this->write($this->dataDir() . '/ecuries.json', array_values($teams));
+    }
+
+    /** @return array<string,array{id:string,nom:string,division:string,active:bool}> indexé par id */
+    public function teams(): array
+    {
+        $out = [];
+        foreach ($this->rawTeams() as $team) {
+            if (!isset($team['id'])) {
+                continue;
             }
-
-            $courses[] = [
-                'id' => $course->getId(),
-                'number' => $course->getNumero(),
-                'name' => $course->getNom(),
-                'circuit' => $circuit?->getVille() ?: $circuit?->getNom(),
-                'country' => $circuit?->getPays(),
-                'date' => $course->getDate()?->format('Y-m-d'),
-                'laps' => $course->getNombreTours(),
-                'status' => $course->getStatut(),
-                'results' => $results,
+            $out[$team['id']] = [
+                'id' => $team['id'],
+                'nom' => (string) ($team['name'] ?? $team['id']),
+                'division' => (string) ($team['division'] ?? ''),
+                'active' => (bool) ($team['active'] ?? true),
             ];
         }
 
-        $entries = [];
-        foreach ($season->getEngagements() as $entry) {
-            $pilot = $entry->getPilote();
-            $team = $entry->getEcurie();
-            $snapshot = $this->entityManager->getRepository(SaisonEngagementDivision::class)->findOneBy(['engagement' => $entry]);
-            $entries[] = [
-                'driver' => $pilot ? trim($pilot->getPrenom() . ' ' . $pilot->getNom()) : null,
-                'team' => $team?->getNom(),
-                'division' => ($snapshot?->getDivision() ?? $team?->getDivision())?->getNom(),
-                'number' => $entry->getNumero(),
-                'status' => $entry->getStatut(),
-            ];
-        }
+        return $out;
+    }
 
-        $document = array_merge([
-            'format_version' => 1,
-            'id' => $season->getId(),
-            'name' => $season->getNom(),
-            'first_year' => $season->getAnnee(),
-            'status' => $season->getStatut(),
-            'start_date' => $season->getDateDebut()?->format('Y-m-d'),
-            'end_date' => $season->getDateFin()?->format('Y-m-d'),
-            'created_at' => is_array($existing) && isset($existing['created_at'])
-                ? $existing['created_at']
-                : (new \DateTimeImmutable())->format(DATE_ATOM),
-            'updated_at' => (new \DateTimeImmutable())->format(DATE_ATOM),
-            'entries' => $entries,
-            'courses' => $courses,
-        ], $extra);
+    public function seasonPath(int $id): string
+    {
+        return $this->dataDir() . '/saisons/' . $id . '.json';
+    }
 
-        if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
-            throw new RuntimeException('Impossible de créer le dossier data/saisons.');
-        }
-
-        $temporary = tempnam($directory, 'saison-');
-        if ($temporary === false) {
-            throw new RuntimeException('Impossible de préparer le fichier JSON de saison.');
-        }
-
-        try {
-            $json = json_encode($document, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
-            if (file_put_contents($temporary, $json) === false || !rename($temporary, $path)) {
-                throw new RuntimeException('Impossible d’enregistrer le JSON de saison.');
-            }
-        } finally {
-            if (is_file($temporary)) {
-                unlink($temporary);
+    /** @return list<array<string,mixed>> */
+    public function seasons(): array
+    {
+        $seasons = [];
+        foreach (glob($this->dataDir() . '/saisons/*.json') ?: [] as $file) {
+            $season = $this->read($file);
+            if (isset($season['id'], $season['nom'])) {
+                $season['courses'] ??= [];
+                $season['engagements'] ??= [];
+                $seasons[] = $season;
             }
         }
+        usort($seasons, static fn (array $a, array $b): int =>
+            [$b['annee'] ?? 0, $a['nom']] <=> [$a['annee'] ?? 0, $b['nom']]);
+
+        return $seasons;
+    }
+
+    public function season(int $id): ?array
+    {
+        $season = $this->read($this->seasonPath($id));
+        if (!isset($season['id'])) {
+            return null;
+        }
+        $season['courses'] ??= [];
+        $season['engagements'] ??= [];
+
+        return $season;
+    }
+
+    public function saveSeason(array $season): string
+    {
+        $season['updated_at'] = (new \DateTimeImmutable())->format(DATE_ATOM);
+        $season['created_at'] ??= $season['updated_at'];
+        $path = $this->seasonPath((int) $season['id']);
+        $this->write($path, $season);
 
         return $path;
+    }
+
+    public function nextSeasonId(): int
+    {
+        $max = 0;
+        foreach ($this->seasons() as $season) {
+            $max = max($max, (int) $season['id']);
+        }
+
+        return $max + 1;
     }
 }
