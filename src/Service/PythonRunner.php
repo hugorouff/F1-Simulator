@@ -6,7 +6,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Process\Process;
 
 /**
- * Lance les scripts Python du projet avec le venv (Windows ou Linux).
+ * Lance les scripts Python du projet : venv local si présent, sinon Python système.
  */
 class PythonRunner
 {
@@ -24,35 +24,44 @@ class PythonRunner
     {
         $isWindows = str_starts_with(PHP_OS, 'WIN');
 
-        return $this->projectDir . ($isWindows
+        $venv = $this->projectDir . ($isWindows
             ? '/python/venv/Scripts/python.exe'
             : '/python/venv/bin/python3');
+
+        if (is_file($venv)) {
+            return $venv;
+        }
+
+        // Pas de venv (cas du conteneur Render) : Python installé sur le système
+        return $isWindows ? 'python' : 'python3';
     }
 
     /**
      * @param list<string> $args arguments passés au script (le chemin du script est ajouté devant)
      *
-     * @throws \RuntimeException si Python ou le script est introuvable, ou si le script échoue
+     * @throws \RuntimeException si le script est introuvable, ou si le script échoue
      */
     public function run(string $script, array $args, int $timeout = 240): string
     {
         $python = $this->pythonPath();
         $scriptPath = $this->projectDir . '/scripts/' . $script;
 
-        if (!is_file($python)) {
-            throw new \RuntimeException('Python introuvable : ' . $python);
-        }
         if (!is_file($scriptPath)) {
             throw new \RuntimeException('Script introuvable : ' . $scriptPath);
         }
 
         $process = new Process([$python, $scriptPath, ...$args], $this->projectDir);
         $process->setTimeout($timeout);
-        $process->run();
+        $process->setEnv(['HOME' => sys_get_temp_dir()] + $_ENV);
+
+        try {
+            $process->run();
+        } catch (\Throwable $e) {
+            throw new \RuntimeException('Impossible de lancer Python (' . $python . ') : ' . $e->getMessage());
+        }
 
         if (!$process->isSuccessful()) {
             $detail = trim($process->getOutput() . "\n" . $process->getErrorOutput());
-            // dernier message JSON d'erreur du script s'il existe
             if (preg_match('/"message":\s*"([^"]+)"/', $detail, $m)) {
                 $detail = $m[1];
             }
