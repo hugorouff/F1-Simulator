@@ -31,6 +31,7 @@ COPY . .
 # Installation des dépendances Composer (sans scripts dev) et Python (FastF1)
 RUN composer install --no-dev --optimize-autoloader --no-scripts
 RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt --break-system-packages; fi
+RUN sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf
 
 # Vidage du cache Symfony en prod (exécuté en root)
 ENV APP_ENV=prod
