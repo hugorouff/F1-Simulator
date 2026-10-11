@@ -28,8 +28,8 @@ WORKDIR /var/www/html
 # Copie des fichiers du projet
 COPY . .
 
-# Installation des dépendances Composer et Python (FastF1)
-RUN composer install --no-dev --optimize-autoloader
+# Installation des dépendances Composer (sans scripts dev/auto-scripts) et Python (FastF1)
+RUN composer install --no-dev --optimize-autoloader --no-scripts
 RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt --break-system-packages; fi
 
 EXPOSE 80
