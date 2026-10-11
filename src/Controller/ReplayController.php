@@ -392,21 +392,30 @@ class ReplayController extends AbstractController
      *
      * @return array<string,array{id:string,name:string,color:string}>
      */
+
     private function teamsIndex(): array
     {
         $file = $this->python->projectDir() . '/data/ecuries.json';
         $raw = is_file($file) ? json_decode((string) file_get_contents($file), true) : [];
         $index = [];
+        
         foreach (is_array($raw) ? $raw : [] as $team) {
             if (!is_array($team) || !isset($team['id'])) {
                 continue;
             }
             $id = (string) $team['id'];
+            
+            // Récupère la couleur unique définie dans ecuries.json, ou utilise la couleur par défaut
             $color = $team['color'] ?? null;
             if (!is_string($color) || !preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
                 $color = self::TEAM_COLORS[$id] ?? self::FALLBACK_PALETTE[crc32($id) % count(self::FALLBACK_PALETTE)];
             }
-            $index[$id] = ['id' => $id, 'name' => (string) ($team['name'] ?? $id), 'color' => $color];
+            
+            $index[$id] = [
+                'id' => $id, 
+                'name' => (string) ($team['name'] ?? $id), 
+                'color' => $color
+            ];
         }
 
         return $index;
