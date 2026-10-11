@@ -33,8 +33,9 @@ RUN composer install --no-dev --optimize-autoloader --no-scripts
 RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt --break-system-packages; fi
 
 # DONNER LES DROITS D'ÉCRITURE À APACHE SUR VAR ET PUBLIC
-RUN chown -R www-data:www-data /var/www/html/var /var/www/html/public
-
+RUN mkdir -p /var/www/html/var/cache /var/www/html/var/log \
+    && chown -R www-data:www-data /var/www/html/var /var/www/html/public
+    
 # Vandage et réchauffement du cache Symfony pour la prod
 ENV APP_ENV=prod
 ENV APP_SECRET=123456789abcdef
