@@ -52,7 +52,8 @@ class PythonRunner
 
         $process = new Process([$python, $scriptPath, ...$args], $this->projectDir);
         $process->setTimeout($timeout);
-        $process->setEnv(['HOME' => sys_get_temp_dir()] + $_ENV);
+        // FastF1 écrit son cache dans HOME : on le place dans un dossier inscriptible
+        $process->setEnv(['HOME' => sys_get_temp_dir()]);
 
         try {
             $process->run();
