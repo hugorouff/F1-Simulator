@@ -2,6 +2,7 @@
     {
         "id": "red-bull",
         "name": "Red Bull Racing",
+        "color": "#3671C6",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 6,
@@ -10,6 +11,7 @@
     {
         "id": "mercedes",
         "name": "Mercedes F1 Team",
+        "color": "#27F4D2",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 8,
@@ -18,6 +20,7 @@
     {
         "id": "ferrari",
         "name": "Scuderia Ferrari",
+        "color": "#E8002D",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 16,
@@ -26,6 +29,7 @@
     {
         "id": "mclaren",
         "name": "McLaren F1 Team",
+        "color": "#FF8000",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 8,
@@ -34,6 +38,7 @@
     {
         "id": "aston-martin",
         "name": "Aston Martin F1 Team",
+        "color": "#229971",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 0,
@@ -42,6 +47,7 @@
     {
         "id": "alpine",
         "name": "Alpine F1 Team",
+        "color": "#FF87BC",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 2,
@@ -50,6 +56,7 @@
     {
         "id": "williams",
         "name": "Williams F1 Team",
+        "color": "#64C4FF",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 9,
@@ -57,7 +64,8 @@
     },
     {
         "id": "rb",
-        "name": "Scuderia Alpha Tauri \/ RB",
+        "name": "Scuderia Alpha Tauri / RB",
+        "color": "#6692FF",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 0,
@@ -66,6 +74,7 @@
     {
         "id": "stake-sauber",
         "name": "Stake F1 Team Sauber",
+        "color": "#52E252",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 0,
@@ -74,6 +83,7 @@
     {
         "id": "haas",
         "name": "Haas F1 Team",
+        "color": "#B6BABD",
         "division": "F1",
         "car_condition": 100,
         "constructor_titles": 0,
@@ -82,6 +92,7 @@
     {
         "id": "cadillac-f1-team",
         "name": "Cadillac F1 Team",
+        "color": "#C9A227",
         "division": "F2",
         "car_condition": 100,
         "constructor_titles": 0,

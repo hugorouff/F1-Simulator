@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import unicodedata
 
 import pandas as pd
 
@@ -25,7 +26,7 @@ def enable_cache():
 
 def format_time(value):
     if pd.isna(value):
-        return "N/A"
+        return None
     total = value.total_seconds()
     minutes, seconds = divmod(total, 60)
     hours, minutes = divmod(int(minutes), 60)
@@ -34,17 +35,41 @@ def format_time(value):
     return f"{minutes}:{seconds:06.3f}"
 
 
+def normalize(value):
+    text = unicodedata.normalize("NFD", str(value))
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return text.lower().strip()
+
+
+def find_round(year, grand_prix):
+    """Cherche le circuit dans le calendrier de l'année, sans correspondance approximative."""
+    if str(grand_prix).isdigit():
+        return int(grand_prix)  # numéro de manche choisi depuis le calendrier FastF1
+    schedule = fastf1.get_event_schedule(int(year), include_testing=False)
+    wanted = normalize(grand_prix)
+    for _, event in schedule.iterrows():
+        fields = [event.get("EventName"), event.get("OfficialEventName"),
+                  event.get("Location"), event.get("Country")]
+        if any(wanted in normalize(f) for f in fields if isinstance(f, str)):
+            return int(event["RoundNumber"])
+    return None
+
+
 def get_session_data(year, grand_prix, session_type):
     try:
         enable_cache()
-        session = fastf1.get_session(int(year), grand_prix, session_type)
+        round_number = find_round(year, grand_prix)
+        if round_number is None:
+            return {"status": "error",
+                    "message": f"Aucun Grand Prix « {grand_prix} » au calendrier {year}."}
+        session = fastf1.get_session(int(year), round_number, session_type)
         session.load(telemetry=False, weather=False, messages=False)
 
         results = []
         for _, driver in session.results.iterrows():
             position = driver["Position"]
             results.append({
-                "position": int(position) if not pd.isna(position) else "NC",
+                "position": int(position) if not pd.isna(position) else None,
                 "number": str(driver["DriverNumber"]),
                 "code": str(driver["Abbreviation"]),
                 "name": str(driver["FullName"]),

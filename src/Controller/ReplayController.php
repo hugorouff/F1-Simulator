@@ -26,6 +26,27 @@ class ReplayController extends AbstractController
         'career_races', 'dnf', 'career_podiums', 'championships',
     ];
 
+    /** Couleurs officielles par id d'écurie (utilisées si ecuries.json n'a pas de champ "color"). */
+    private const TEAM_COLORS = [
+        'red-bull' => '#3671C6',
+        'mercedes' => '#27F4D2',
+        'ferrari' => '#E8002D',
+        'mclaren' => '#FF8000',
+        'aston-martin' => '#229971',
+        'alpine' => '#FF87BC',
+        'williams' => '#64C4FF',
+        'rb' => '#6692FF',
+        'stake-sauber' => '#52E252',
+        'haas' => '#B6BABD',
+        'cadillac-f1-team' => '#C9A227',
+    ];
+
+    /** Couleurs de repli pour les écuries créées sans couleur ni id connu. */
+    private const FALLBACK_PALETTE = [
+        '#E8002D', '#27F4D2', '#FF8000', '#3671C6', '#229971', '#FF87BC',
+        '#64C4FF', '#52E252', '#B6BABD', '#C9A227', '#9B5DE5', '#F15BB5',
+    ];
+
     public function __construct(private readonly PythonRunner $python)
     {
     }
@@ -64,7 +85,7 @@ class ReplayController extends AbstractController
 
     /**
      * Génère une course complète : tracé (réel ou démo) + simulation.
-     * Retourne directement le JSON produit par sim_engine.py.
+     * Retourne le JSON produit par sim_engine.py, avec les couleurs d'écurie appliquées.
      */
     #[Route('/api/replay/simulate', name: 'api_replay_simulate', methods: ['GET'])]
     public function simulate(Request $request, EntityManagerInterface $entityManager): Response
@@ -87,11 +108,16 @@ class ReplayController extends AbstractController
         ];
 
         $temporaryDriversFile = null;
+        $enrichedRosterFile = null;
         try {
             $circuitFile = $demo
                 ? $this->demoCircuit()
                 : $this->realCircuit($q->getInt('year', 2020), trim((string) $q->get('gp', 'Monza')));
-            $driversFile = $this->python->projectDir() . '/data/pilotes.json';
+
+            // Roster avec le champ "team" reconstruit depuis "team_id"
+            $enrichedRosterFile = $this->writeEnrichedRoster();
+            $driversFile = $enrichedRosterFile;
+
             if ($q->getInt('course_id') > 0 || $q->getInt('division_id') > 0) {
                 if ($q->getInt('course_id') < 1 || $q->getInt('division_id') < 1) {
                     throw new \RuntimeException('La course et la division sont nécessaires pour simuler une manche de saison.');
@@ -114,12 +140,14 @@ class ReplayController extends AbstractController
                 array_push($args, '--seed', (string) $seed);
             }
 
-            $json = $this->python->run('sim_engine.py', $args, 120);
+            $json = $this->applyTeamColors($this->python->run('sim_engine.py', $args, 120));
         } catch (\Throwable $e) {
             return new JsonResponse(['error' => $e->getMessage()], 500);
         } finally {
-            if ($temporaryDriversFile !== null && is_file($temporaryDriversFile)) {
-                unlink($temporaryDriversFile);
+            foreach ([$temporaryDriversFile, $enrichedRosterFile] as $tmp) {
+                if ($tmp !== null && is_file($tmp)) {
+                    unlink($tmp);
+                }
             }
         }
 
@@ -253,7 +281,7 @@ class ReplayController extends AbstractController
             $course->setStatut('terminee');
         }
         $entityManager->flush();
-        $jsonStore->save($course->getSaison());
+        $jsonStore->saveSeason($course->getSaison());
 
         return new JsonResponse(['saved' => $saved, 'course' => $course->getNom()]);
     }
@@ -357,6 +385,119 @@ class ReplayController extends AbstractController
         $data = is_file($file) ? json_decode((string) file_get_contents($file), true) : [];
 
         return is_array($data) ? $data : [];
+    }
+
+    /**
+     * Écuries indexées par id : nom + couleur (ecuries.json, sinon couleur officielle, sinon repli).
+     *
+     * @return array<string,array{id:string,name:string,color:string}>
+     */
+    private function teamsIndex(): array
+    {
+        $file = $this->python->projectDir() . '/data/ecuries.json';
+        $raw = is_file($file) ? json_decode((string) file_get_contents($file), true) : [];
+        $index = [];
+        foreach (is_array($raw) ? $raw : [] as $team) {
+            if (!is_array($team) || !isset($team['id'])) {
+                continue;
+            }
+            $id = (string) $team['id'];
+            $color = $team['color'] ?? null;
+            if (!is_string($color) || !preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
+                $color = self::TEAM_COLORS[$id] ?? self::FALLBACK_PALETTE[crc32($id) % count(self::FALLBACK_PALETTE)];
+            }
+            $index[$id] = ['id' => $id, 'name' => (string) ($team['name'] ?? $id), 'color' => $color];
+        }
+
+        return $index;
+    }
+
+    /**
+     * Écurie d'un pilote : par team_id, ou (ancien format) par nom d'écurie.
+     *
+     * @param array<string,mixed> $driver
+     * @param array<string,array{id:string,name:string,color:string}> $teams
+     * @return array{id:string,name:string,color:string}|null
+     */
+    private function teamOf(array $driver, array $teams): ?array
+    {
+        $teamId = $driver['team_id'] ?? null;
+        if (is_string($teamId) && isset($teams[$teamId])) {
+            return $teams[$teamId];
+        }
+        $teamName = $driver['team'] ?? null;
+        if (is_string($teamName) && $teamName !== '') {
+            foreach ($teams as $team) {
+                if (strcasecmp($team['name'], $teamName) === 0) {
+                    return $team;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** Copie temporaire du roster avec "team" = nom de l'écurie, pour sim_engine.py. */
+    private function writeEnrichedRoster(): string
+    {
+        $teams = $this->teamsIndex();
+        $drivers = $this->readDrivers();
+        foreach ($drivers as &$driver) {
+            $team = $this->teamOf($driver, $teams);
+            if ($team !== null) {
+                $driver['team'] = $team['name'];
+            }
+        }
+        unset($driver);
+
+        $directory = $this->python->projectDir() . '/var/cache';
+        if (!is_dir($directory)) {
+            mkdir($directory, 0775, true);
+        }
+        $file = tempnam($directory, 'roster-');
+        if ($file === false || file_put_contents($file, json_encode($drivers, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)) === false) {
+            throw new \RuntimeException('Impossible de préparer le roster des pilotes.');
+        }
+
+        return $file;
+    }
+
+    /** Applique la couleur et le nom d'écurie de chaque pilote dans le JSON renvoyé par la simulation. */
+    private function applyTeamColors(string $json): string
+    {
+        $data = json_decode($json, true);
+        if (!is_array($data)) {
+            return $json;
+        }
+
+        $teams = $this->teamsIndex();
+        $byName = [];
+        foreach ($this->readDrivers() as $driver) {
+            if (!isset($driver['name']) || !is_string($driver['name'])) {
+                continue;
+            }
+            $team = $this->teamOf($driver, $teams);
+            if ($team !== null) {
+                $byName[$driver['name']] = $team;
+            }
+        }
+
+        foreach ($data['drivers'] ?? [] as $i => $driver) {
+            $team = $byName[$driver['name'] ?? ''] ?? null;
+            if ($team !== null) {
+                $data['drivers'][$i]['color'] = $team['color'];
+            }
+        }
+        foreach ($data['results'] ?? [] as $i => $result) {
+            $team = $byName[$result['name'] ?? ''] ?? null;
+            if ($team !== null) {
+                $data['results'][$i]['team'] = $team['name'];
+            }
+        }
+
+        $encoded = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return $encoded === false ? $json : $encoded;
     }
 
     /** @return array<string,array<string,float>> */

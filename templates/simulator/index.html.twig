@@ -1,11 +1,11 @@
 {% extends 'base.html.twig' %}
 
-{% block title %}Simulateur F1 - {{ selected_gp }} {{ selected_year }}{% endblock %}
+{% block title %}Simulateur F1 - {{ event_name ?? 'Résultats' }} {{ selected_year }}{% endblock %}
 
 {% block body %}
 <div class="mb-8 border-l-4 border-f1-red pl-4">
     <h2 class="text-2xl sm:text-3xl font-extrabold uppercase tracking-wide">
-        {{ event_name ?? (selected_gp ~ ' ' ~ selected_year) }}
+        {{ event_name ?? ('Résultats FastF1 ' ~ selected_year) }}
     </h2>
     <p class="text-gray-400 text-sm mt-1">
         {{ sessions[selected_session] ?? selected_session }} · {{ selected_year }}
@@ -13,10 +13,13 @@
 </div>
 
 <div class="bg-f1-card p-4 sm:p-6 rounded-xl border border-f1-border mb-8 shadow-lg">
-    <form method="GET" action="{{ path('app_simulator') }}" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <form method="GET" action="{{ path('app_simulator') }}" id="sim-form"
+          data-calendar-url="{{ path('api_fastf1_calendar', {year: 2000}) }}"
+          data-selected-round="{{ selected_round }}"
+          class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div>
             <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Saison</label>
-            <select name="year" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
+            <select name="year" id="sim-year" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
                 {% for y in years %}
                     <option value="{{ y }}" {{ selected_year == y ? 'selected' }}>{{ y }}</option>
                 {% endfor %}
@@ -24,10 +27,8 @@
         </div>
         <div>
             <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Grand Prix</label>
-            <select name="grand_prix" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
-                {% for gp in grands_prix %}
-                    <option value="{{ gp }}" {{ selected_gp == gp ? 'selected' }}>{{ gp }}</option>
-                {% endfor %}
+            <select name="round" id="sim-round" required disabled class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
+                <option value="">Chargement du calendrier…</option>
             </select>
         </div>
         <div>
@@ -39,12 +40,13 @@
             </select>
         </div>
         <div class="flex items-end">
-            <button type="submit" id="load-btn" class="w-full bg-f1-red hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition uppercase text-sm tracking-wider">
+            <button type="submit" id="load-btn" disabled class="w-full bg-f1-red hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition uppercase text-sm tracking-wider disabled:cursor-not-allowed disabled:opacity-50">
                 Charger
             </button>
         </div>
     </form>
-    <p id="loading" class="hidden text-sm text-gray-400 mt-4">
+    <p id="calendar-status" class="text-xs text-gray-500 mt-3 min-h-4" role="status"></p>
+    <p id="loading" class="hidden text-sm text-gray-400 mt-2">
         Chargement des données… le premier appel d'une session peut prendre jusqu'à 2 minutes.
     </p>
 </div>
@@ -89,7 +91,7 @@
                 {% else %}
                     <tr>
                         <td colspan="5" class="py-8 text-center text-gray-400">
-                            Aucune donnée à afficher.
+                            {{ selected_round > 0 ? 'Aucune donnée à afficher.' : 'Choisis une saison, un Grand Prix et une session, puis clique sur « Charger ».' }}
                         </td>
                     </tr>
                 {% endfor %}
@@ -99,9 +101,68 @@
 </div>
 
 <script>
-    document.querySelector('form').addEventListener('submit', function () {
+(function () {
+    'use strict';
+    var form = document.getElementById('sim-form');
+    var year = document.getElementById('sim-year');
+    var round = document.getElementById('sim-round');
+    var button = document.getElementById('load-btn');
+    var status = document.getElementById('calendar-status');
+    var pending = parseInt(form.dataset.selectedRound, 10) || 0;
+    var token = 0;
+
+    function setOption(text) {
+        round.textContent = '';
+        var option = document.createElement('option');
+        option.value = '';
+        option.textContent = text;
+        round.appendChild(option);
+    }
+
+    function loadCalendar() {
+        var current = ++token;
+        round.disabled = true;
+        button.disabled = true;
+        status.textContent = '';
+        setOption('Chargement du calendrier…');
+
+        fetch(form.dataset.calendarUrl.replace('2000', year.value))
+            .then(function (response) {
+                return response.json().then(function (data) {
+                    if (!response.ok) throw new Error(data.error || 'Calendrier indisponible');
+                    return data;
+                });
+            })
+            .then(function (data) {
+                if (current !== token) return;
+                round.textContent = '';
+                data.events.forEach(function (event) {
+                    var option = document.createElement('option');
+                    option.value = event.round;
+                    option.textContent = 'R' + event.round + ' · ' + (event.name || 'Grand Prix')
+                        + (event.location ? ' (' + event.location + ')' : '');
+                    if (Number(event.round) === pending) option.selected = true;
+                    round.appendChild(option);
+                });
+                pending = 0;
+                var empty = data.events.length === 0;
+                round.disabled = empty;
+                button.disabled = empty;
+                status.textContent = data.events.length + ' manche(s) au calendrier ' + year.value + '.';
+            })
+            .catch(function (error) {
+                if (current !== token) return;
+                setOption('Calendrier indisponible');
+                status.textContent = 'FastF1 : ' + error.message;
+            });
+    }
+
+    year.addEventListener('change', function () { pending = 0; loadCalendar(); });
+    form.addEventListener('submit', function () {
         document.getElementById('loading').classList.remove('hidden');
-        document.getElementById('load-btn').classList.add('opacity-50');
+        button.classList.add('opacity-50');
     });
+    loadCalendar();
+})();
 </script>
 {% endblock %}
