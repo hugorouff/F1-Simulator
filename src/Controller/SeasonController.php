@@ -6,6 +6,7 @@ use App\Service\FastF1CalendarService;
 use App\Service\SeasonJsonStore;
 use App\Service\SeasonPromotionService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -202,6 +203,74 @@ final class SeasonController extends AbstractController
         return $this->redirectToRoute('app_seasons');
     }
 
+    #[Route('/saisons/import', name: 'app_season_import', methods: ['POST'])]
+    public function import(Request $request, SeasonJsonStore $store): Response
+    {
+        if (!$this->isCsrfTokenValid('import_season', $request->request->get('_token'))) {
+            throw $this->createAccessDeniedException('Jeton de formulaire invalide.');
+        }
+
+        $file = $request->files->get('json_file');
+        if (!$file instanceof UploadedFile || !$file->isValid()) {
+            $this->addFlash('error', 'Aucun fichier valide sélectionné.');
+
+            return $this->redirectToRoute('app_seasons');
+        }
+        if ($file->getSize() > 5 * 1024 * 1024) {
+            $this->addFlash('error', 'Fichier trop volumineux (5 Mo maximum).');
+
+            return $this->redirectToRoute('app_seasons');
+        }
+
+        try {
+            $data = json_decode((string) file_get_contents($file->getPathname()), true, 512, JSON_THROW_ON_ERROR);
+            if (!is_array($data)) {
+                throw new \RuntimeException('Le JSON doit contenir un objet de saison.');
+            }
+            $season = $this->normalizeSeason($data);
+        } catch (\JsonException) {
+            $this->addFlash('error', 'Fichier JSON invalide.');
+
+            return $this->redirectToRoute('app_seasons');
+        } catch (\RuntimeException $error) {
+            $this->addFlash('error', 'Import refusé : ' . $error->getMessage());
+
+            return $this->redirectToRoute('app_seasons');
+        }
+
+        $replace = $request->request->getBoolean('replace');
+        $existing = $store->seasons();
+        $sameId = null;
+        foreach ($existing as $other) {
+            if ((int) $other['id'] === $season['id']) {
+                $sameId = $other;
+            }
+        }
+
+        if ($sameId !== null && !$replace) {
+            $season['id'] = $store->nextSeasonId();
+            $sameId = null;
+        }
+        foreach ($existing as $other) {
+            if ((int) $other['id'] !== $season['id'] && mb_strtolower($other['nom']) === mb_strtolower($season['nom'])) {
+                $this->addFlash('error', 'Une autre saison porte déjà ce nom.');
+
+                return $this->redirectToRoute('app_seasons');
+            }
+        }
+        if ($sameId !== null && isset($sameId['created_at'])) {
+            $season['created_at'] = $sameId['created_at'];
+        }
+
+        $store->saveSeason($season);
+        $this->addFlash('success', sprintf(
+            'Saison « %s » importée (n°%d, %d course(s), %d engagement(s)).',
+            $season['nom'], $season['id'], count($season['courses']), count($season['engagements']),
+        ));
+
+        return $this->redirectToRoute('app_seasons');
+    }
+
     #[Route('/saisons/{id}/cloturer', name: 'app_season_close', requirements: ['id' => '\\d+'], methods: ['POST'])]
     public function close(int $id, Request $request, SeasonJsonStore $store, SeasonPromotionService $promotion): Response
     {
@@ -375,6 +444,92 @@ final class SeasonController extends AbstractController
         $this->addFlash('success', sprintf('%s inscrite en %s avec %d pilote(s).', $team['nom'], $division['nom'], count($driverNames)));
 
         return $this->redirectToRoute('app_seasons');
+    }
+
+    /** Valide et nettoie un JSON de saison avant écriture. */
+    private function normalizeSeason(array $data): array
+    {
+        $nom = trim((string) ($data['nom'] ?? ''));
+        if ($nom === '' || mb_strlen($nom) > 100) {
+            throw new \RuntimeException('champ « nom » manquant ou trop long.');
+        }
+        if (!isset($data['courses']) || !is_array($data['courses']) || $data['courses'] === []) {
+            throw new \RuntimeException('la saison doit contenir au moins une course.');
+        }
+
+        $courses = [];
+        foreach (array_values($data['courses']) as $i => $race) {
+            if (!is_array($race) || trim((string) ($race['nom'] ?? '')) === '') {
+                throw new \RuntimeException(sprintf('la course %d n’a pas de nom.', $i + 1));
+            }
+            $results = [];
+            foreach ($race['resultats'] ?? [] as $result) {
+                if (!is_array($result) || !isset($result['ecurie_id'])) {
+                    continue;
+                }
+                $results[] = [
+                    'pilote' => (string) ($result['pilote'] ?? ''),
+                    'ecurie_id' => (string) $result['ecurie_id'],
+                    'position' => isset($result['position']) ? (int) $result['position'] : null,
+                    'points' => (float) ($result['points'] ?? 0),
+                ];
+            }
+            $circuit = is_array($race['circuit'] ?? null) ? $race['circuit'] : [];
+            $courses[] = [
+                'id' => $i + 1,
+                'numero' => $i + 1,
+                'nom' => trim((string) $race['nom']),
+                'date' => isset($race['date']) && preg_match('/^\d{4}-\d{2}-\d{2}/', (string) $race['date']) ? substr((string) $race['date'], 0, 10) : null,
+                'statut' => in_array($race['statut'] ?? '', ['planifiee', 'terminee'], true) ? $race['statut'] : 'planifiee',
+                'annee_fastf1' => isset($race['annee_fastf1']) ? (int) $race['annee_fastf1'] : null,
+                'circuit' => [
+                    'nom' => (string) ($circuit['nom'] ?? $race['nom']),
+                    'ville' => $circuit['ville'] ?? null,
+                    'pays' => $circuit['pays'] ?? null,
+                ],
+                'resultats' => $results,
+            ];
+        }
+
+        $engagements = [];
+        $seenTeams = [];
+        foreach ($data['engagements'] ?? [] as $entry) {
+            if (!is_array($entry) || !isset($entry['ecurie_id'], $entry['division_id'])) {
+                continue;
+            }
+            $pilots = array_values(array_unique(array_filter((array) ($entry['pilotes'] ?? []), 'is_string')));
+            if (count($pilots) > 2) {
+                throw new \RuntimeException(sprintf('l’écurie « %s » a plus de 2 pilotes.', $entry['ecurie_id']));
+            }
+            if (isset($seenTeams[$entry['ecurie_id']])) {
+                throw new \RuntimeException(sprintf('l’écurie « %s » est engagée deux fois.', $entry['ecurie_id']));
+            }
+            $seenTeams[$entry['ecurie_id']] = true;
+            $engagements[] = [
+                'ecurie_id' => (string) $entry['ecurie_id'],
+                'division_id' => (int) $entry['division_id'],
+                'pilotes' => $pilots,
+            ];
+        }
+
+        $dates = array_values(array_filter(array_column($courses, 'date')));
+        $season = [
+            'id' => max(1, (int) ($data['id'] ?? 0)),
+            'nom' => $nom,
+            'annee' => (int) ($data['annee'] ?? ($dates !== [] ? substr($dates[0], 0, 4) : date('Y'))),
+            'statut' => in_array($data['statut'] ?? '', ['brouillon', 'terminee'], true) ? $data['statut'] : 'brouillon',
+            'date_debut' => $data['date_debut'] ?? ($dates[0] ?? null),
+            'date_fin' => $data['date_fin'] ?? ($dates !== [] ? end($dates) : null),
+            'courses' => $courses,
+            'engagements' => $engagements,
+        ];
+        foreach (['standings', 'promotion_movements'] as $optional) {
+            if (isset($data[$optional]) && is_array($data[$optional])) {
+                $season[$optional] = $data[$optional];
+            }
+        }
+
+        return $season;
     }
 
     /** @return list<array<string,mixed>> */
