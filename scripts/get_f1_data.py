@@ -1,27 +1,24 @@
+import gc
 import json
 import os
 import sys
 import unicodedata
 
+import fastf1
 import pandas as pd
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-import fastf1  # noqa: E402
-
 
 def enable_cache():
-    base = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    candidates = [os.path.join(base, "var", "cache", "fastf1"), "/tmp/fastf1"]
-    for path in candidates:
-        try:
-            os.makedirs(path, exist_ok=True)
-            if os.access(path, os.W_OK):
-                fastf1.Cache.enable_cache(path)
-                return
-        except OSError:
-            continue
+    cache_dir = "/tmp/fastf1_cache"
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        if os.access(cache_dir, os.W_OK):
+            fastf1.Cache.enable_cache(cache_dir)
+    except OSError:
+        pass
 
 
 def format_time(value):
@@ -42,9 +39,8 @@ def normalize(value):
 
 
 def find_round(year, grand_prix):
-    """Cherche le circuit dans le calendrier de l'année, sans correspondance approximative."""
     if str(grand_prix).isdigit():
-        return int(grand_prix)  # numéro de manche choisi depuis le calendrier FastF1
+        return int(grand_prix)
     schedule = fastf1.get_event_schedule(int(year), include_testing=False)
     wanted = normalize(grand_prix)
     for _, event in schedule.iterrows():
@@ -79,8 +75,11 @@ def get_session_data(year, grand_prix, session_type):
             })
 
         event = str(session.event["EventName"]) if "EventName" in session.event else None
+        
+        gc.collect()
         return {"status": "success", "event": event, "data": results}
-    except Exception as exc:  # message renvoyé au contrôleur
+    except Exception as exc:
+        gc.collect()
         return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
 
 
