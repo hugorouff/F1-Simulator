@@ -5,11 +5,13 @@ Usage : python export_circuit.py <année> <grand_prix> [fichier_sortie.json]
 Le tracé vient du tour le plus rapide des qualifications (même méthode que
 f1-race-replay). Sans fichier de sortie, le JSON est écrit sur stdout.
 """
+import gc
 import json
 import logging
 import os
 import sys
 
+import fastf1
 import numpy as np
 
 if sys.platform == "win32":
@@ -18,6 +20,16 @@ if sys.platform == "win32":
 logging.getLogger("fastf1").setLevel(logging.ERROR)
 
 N_POINTS = 700  # points du tracé après rééchantillonnage
+
+
+def enable_cache():
+    cache_dir = "/tmp/fastf1_cache"
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        if os.access(cache_dir, os.W_OK):
+            fastf1.Cache.enable_cache(cache_dir)
+    except OSError:
+        pass
 
 
 def resample(x, y, distance, n=N_POINTS):
@@ -46,13 +58,8 @@ def drs_zones(drs, n_src, n_dst=N_POINTS):
 
 
 def export(year, gp):
-    import fastf1
+    enable_cache()
 
-    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "var", "cache", "fastf1")
-    os.makedirs(cache_dir, exist_ok=True)
-    fastf1.Cache.enable_cache(cache_dir)
-
-    # Qualifications d'abord (meilleur tracé), sinon la course
     session, lap = None, None
     for code in ("Q", "R"):
         try:
@@ -71,7 +78,6 @@ def export(year, gp):
     x, y, s_grid, length_units = resample(tel["X"], tel["Y"], tel["Distance"])
     ref_lap = lap["LapTime"].total_seconds()
 
-    # Numéros de virages (facultatif : peut échouer hors ligne)
     corners = []
     try:
         info = session.get_circuit_info()
@@ -82,12 +88,12 @@ def export(year, gp):
     except Exception:
         pass
 
-    return {
+    data = {
         "name": str(session.event["EventName"]),
         "location": str(session.event.get("Location", "")),
         "country": str(session.event.get("Country", "")),
         "year": int(year),
-        "length_m": round(length_units, 1),  # Distance FastF1 en mètres
+        "length_m": round(length_units, 1),
         "ref_lap_s": round(ref_lap, 3),
         "x": [round(float(v), 1) for v in x],
         "y": [round(float(v), 1) for v in y],
@@ -95,6 +101,9 @@ def export(year, gp):
         "drs_zones": drs_zones(tel["DRS"], len(tel)) if "DRS" in tel else [],
         "corners": corners,
     }
+    
+    gc.collect()
+    return data
 
 
 if __name__ == "__main__":
