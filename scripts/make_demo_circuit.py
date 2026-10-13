@@ -1,4 +1,4 @@
-"""Génère un circuit fictif (JSON) utilisable hors ligne, au même format que export_circuit.py."""
+import gc
 import json
 import math
 import sys
@@ -15,14 +15,17 @@ def demo(n=700):
     x, y = r * np.cos(t) * 1.4, r * np.sin(t)
     seg = np.hypot(np.diff(np.append(x, x[0])), np.diff(np.append(y, y[0])))
     s = np.concatenate(([0], np.cumsum(seg)[:-1]))
-    length_m = float(seg.sum()) / 10  # x,y en 1/10 m comme FastF1
-    return {
+    length_m = float(seg.sum()) / 10
+    
+    data = {
         "name": "Circuit de démonstration", "location": "Demo", "country": "-",
         "length_m": round(length_m, 1), "ref_lap_s": 88.0,
         "x": [round(float(v), 1) for v in x], "y": [round(float(v), 1) for v in y],
         "s": [round(float(v) / 10, 1) for v in s],
         "drs_zones": [[40, 110], [400, 470]], "corners": [],
     }
+    gc.collect()
+    return data
 
 
 if __name__ == "__main__":
