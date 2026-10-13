@@ -1,17 +1,26 @@
-"""Print a season's Formula 1 event schedule from FastF1 as JSON."""
+import gc
 import json
 import logging
 import math
-from pathlib import Path
+import os
 import sys
 
 import fastf1
-
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 logging.getLogger("fastf1").setLevel(logging.ERROR)
+
+
+def enable_cache():
+    cache_dir = "/tmp/fastf1_cache"
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        if os.access(cache_dir, os.W_OK):
+            fastf1.Cache.enable_cache(cache_dir)
+    except OSError:
+        pass
 
 
 def clean(value):
@@ -27,9 +36,8 @@ def main():
         raise ValueError("Usage: list_f1_calendar.py <year>")
 
     year = int(sys.argv[1])
-    cache_dir = Path(__file__).resolve().parent.parent / "var" / "cache" / "fastf1"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    fastf1.Cache.enable_cache(str(cache_dir))
+    enable_cache()
+    
     schedule = fastf1.get_event_schedule(year, include_testing=False)
     events = []
     for _, event in schedule.iterrows():
@@ -44,6 +52,7 @@ def main():
             "date": clean(event.get("EventDate")),
         })
 
+    gc.collect()
     print(json.dumps({"year": year, "events": events}, ensure_ascii=False))
 
 
@@ -51,5 +60,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
+        gc.collect()
         print(json.dumps({"error": str(error)}, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
