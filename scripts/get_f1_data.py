@@ -1,3 +1,4 @@
+"""Récupère les résultats d'une session F1 via FastF1 et les renvoie en JSON."""
 import gc
 import json
 import os
@@ -32,33 +33,10 @@ def format_time(value):
     return f"{minutes}:{seconds:06.3f}"
 
 
-def normalize(value):
-    text = unicodedata.normalize("NFD", str(value))
-    text = "".join(c for c in text if not unicodedata.combining(c))
-    return text.lower().strip()
-
-
-def find_round(year, grand_prix):
-    if str(grand_prix).isdigit():
-        return int(grand_prix)
-    schedule = fastf1.get_event_schedule(int(year), include_testing=False)
-    wanted = normalize(grand_prix)
-    for _, event in schedule.iterrows():
-        fields = [event.get("EventName"), event.get("OfficialEventName"),
-                  event.get("Location"), event.get("Country")]
-        if any(wanted in normalize(f) for f in fields if isinstance(f, str)):
-            return int(event["RoundNumber"])
-    return None
-
-
-def get_session_data(year, grand_prix, session_type):
+def get_session_data(year, round_number, session_type):
     try:
         enable_cache()
-        round_number = find_round(year, grand_prix)
-        if round_number is None:
-            return {"status": "error",
-                    "message": f"Aucun Grand Prix « {grand_prix} » au calendrier {year}."}
-        session = fastf1.get_session(int(year), round_number, session_type)
+        session = fastf1.get_session(int(year), int(round_number), session_type)
         session.load(telemetry=False, weather=False, messages=False)
 
         results = []
@@ -85,7 +63,7 @@ def get_session_data(year, grand_prix, session_type):
 
 if __name__ == "__main__":
     year = sys.argv[1] if len(sys.argv) > 1 else 2023
-    grand_prix = sys.argv[2] if len(sys.argv) > 2 else "Monza"
+    round_number = sys.argv[2] if len(sys.argv) > 2 else 1
     session_type = sys.argv[3] if len(sys.argv) > 3 else "R"
 
-    print(json.dumps(get_session_data(year, grand_prix, session_type), ensure_ascii=False))
+    print(json.dumps(get_session_data(year, round_number, session_type), ensure_ascii=False))
