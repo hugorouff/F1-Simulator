@@ -272,7 +272,7 @@ class Race:
         chaos = self.chaos
         rel = d["reliab"]
         t = d["cum"][-1]
-        forced_here = [e for e in forced.get(lap, []) if e.get("driver"] == d["code"]]
+        forced_here = [e for e in forced.get(lap, []) if e.get("driver") == d["code"]]
         kinds = {e["type"] for e in forced_here}
 
         p_mech = 0.0035 * chaos * (0.6 + d["wear"] / 40.0) / max(rel, 0.1)
