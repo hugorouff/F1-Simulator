@@ -1,7 +1,8 @@
-"""Search all historical Formula 1 event schedules exposed by FastF1."""
+import gc
 import json
 import logging
 import math
+import os
 import sys
 import unicodedata
 from datetime import date
@@ -9,11 +10,20 @@ from pathlib import Path
 
 import fastf1
 
-
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 logging.getLogger("fastf1").setLevel(logging.ERROR)
+
+
+def enable_cache():
+    cache_dir = "/tmp/fastf1_cache"
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        if os.access(cache_dir, os.W_OK):
+            fastf1.Cache.enable_cache(cache_dir)
+    except OSError:
+        pass
 
 
 def clean(value):
@@ -90,11 +100,9 @@ def main():
     if query and len(query) < 2:
         raise ValueError("La recherche doit contenir au moins deux caractères.")
 
-    project_dir = Path(__file__).resolve().parent.parent
-    cache_dir = project_dir / "var" / "cache" / "fastf1"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    fastf1.Cache.enable_cache(str(cache_dir))
-    events = catalog(cache_dir / "event_catalog.json")
+    enable_cache()
+    cat_path = Path("/tmp/fastf1_cache/event_catalog.json")
+    events = catalog(cat_path)
     circuits = unique_circuits(events)
     matches = circuits if not query else [
         event for event in events
@@ -102,6 +110,8 @@ def main():
     ]
     if query:
         matches = unique_circuits(matches)
+        
+    gc.collect()
     print(json.dumps({"events": matches if not query else matches[:250]}, ensure_ascii=False))
 
 
@@ -109,5 +119,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
+        gc.collect()
         print(json.dumps({"error": str(error)}, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
