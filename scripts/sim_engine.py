@@ -1,18 +1,6 @@
-"""Moteur de simulation de course F1.
-
-Usage :
-    python sim_engine.py --drivers data/pilotes.json --circuit circuit.json \
-        [--laps 20] [--seed 42] [--config influences.json]
-
-Entrées
-  - drivers : JSON (ou .xlsx, mêmes colonnes que ton projet C#) de pilotes
-  - circuit : JSON produit par export_circuit.py (tracé réel) ou make_demo_circuit.py
-  - config  : influences choisies avant/pendant la course (voir DEFAULT_CONFIG)
-
-Sortie (stdout, JSON) : tracé, positions de chaque voiture seconde par seconde,
-événements, résultats et statistiques pilotes mises à jour.
-"""
+"""Moteur de simulation de course F1."""
 import argparse
+import gc
 import json
 import math
 import random
@@ -31,15 +19,14 @@ SC_LAP_FACTOR = 1.45     # tour sous Safety Car = 145 % d'un tour normal
 SC_GAP_S = 1.0           # écart visé entre voitures derrière la Safety Car
 
 DEFAULT_CONFIG = {
-    "weather": "dry",         # dry | rain | random
-    "chaos": 1.0,             # multiplicateur de tous les incidents (0 = course propre)
-    "safety_car": True,       # autorise les Safety Cars
-    "team_strength": {},      # {"Mercedes": 0.97} écrase les valeurs par défaut
-    "driver_modifiers": {},   # {"HAM": {"pace": -0.3, "reliability": 1.5}}
-    "forced_events": [],      # [{"lap": 10, "type": "safety_car"}, {"lap": 5, "driver": "HAM", "type": "puncture"}]
+    "weather": "dry",          # dry | rain | random
+    "chaos": 1.0,              # multiplicateur de tous les incidents (0 = course propre)
+    "safety_car": True,        # autorise les Safety Cars
+    "team_strength": {},       # {"Mercedes": 0.97} écrase les valeurs par défaut
+    "driver_modifiers": {},    # {"HAM": {"pace": -0.3, "reliability": 1.5}}
+    "forced_events": [],       # [{"lap": 10, "type": "safety_car"}, {"lap": 5, "driver": "HAM", "type": "puncture"}]
 }
 
-# Force relative des voitures (1.0 = référence). Modifiable via la config.
 TEAM_STRENGTH = {
     "red bull": 1.00, "mercedes": 0.97, "ferrari": 0.96, "mclaren": 0.96,
     "aston": 0.93, "alpine": 0.90, "williams": 0.88, "haas": 0.87,
@@ -54,7 +41,7 @@ TEAM_COLORS = {
     "renault": "#FFF500", "toro": "#6692FF", "rb": "#6692FF", "kick": "#52E252",
 }
 
-TYRES = {  # décalage de rythme (s/tour), dégradation (s/tour par tour d'usure), durée de vie
+TYRES = {
     "S": {"offset": -0.55, "deg": 0.110, "life": 16},
     "M": {"offset": 0.0, "deg": 0.065, "life": 28},
     "H": {"offset": 0.50, "deg": 0.040, "life": 42},
@@ -100,7 +87,6 @@ def load_drivers(path):
 
 
 def skill_rating(d):
-    """Note de pilote entre 0 et 1, calculée depuis ses statistiques."""
     races = max(d.get("career_races", 0), 1)
     win_rate = d.get("career_wins", 0) / races
     podium_rate = d.get("career_podiums", 0) / races
@@ -145,7 +131,6 @@ class Race:
         self.weather = self._pick_weather()
         self.rain_laps = self._rain_window()
 
-    # -- météo ---------------------------------------------------------
     def _pick_weather(self):
         w = self.cfg["weather"]
         if w == "random":
@@ -162,20 +147,19 @@ class Race:
     def log(self, lap, t, kind, text, code=None):
         self.events.append({"lap": lap, "t": round(t, 1), "type": kind, "driver": code, "text": text})
 
-    # -- rythme --------------------------------------------------------
     def base_lap(self, d, lap, raining):
         ref = self.circuit["ref_lap_s"]
         pace = ref * (1 + (1 - d["car"]) * 0.045 + (1 - d["skill"]) * 0.020)
         pace += d["pace_mod"]
         tyre = TYRES[d["tyre"]]
         pace += tyre["offset"] + tyre["deg"] * d["tyre_age"]
-        if d["tyre_age"] > tyre["life"]:  # pneus à la corde : gros écart
+        if d["tyre_age"] > tyre["life"]:
             pace += 0.25 * (d["tyre_age"] - tyre["life"])
-        pace -= 0.03 * lap                              # voiture qui s'allège
-        pace += (d["wear"] / 100.0) * 1.4               # usure mécanique cumulée
+        pace -= 0.03 * lap
+        pace += (d["wear"] / 100.0) * 1.4
         pace += d["damage"]
         if raining and d["tyre"] != "W":
-            pace += 7.0 * (1.2 - d["skill"])            # slicks sous la pluie
+            pace += 7.0 * (1.2 - d["skill"])
         elif not raining and d["tyre"] == "W":
             pace += 6.0
         noise = self.rng.gauss(0, 0.20 + (0.35 if raining else 0.0) * (1.1 - d["skill"]))
@@ -188,14 +172,13 @@ class Race:
             max(2, int(self.laps * (i + 1) / (n + 1) + self.rng.randint(-2, 2))) for i in range(n)
         ) if self.laps >= 6 else []
 
-    # -- simulation ----------------------------------------------------
     def run(self):
         order = sorted(self.drivers, key=lambda d: -(d["skill"] * 0.4 + d["car"] * 0.6) + self.rng.gauss(0, 0.04))
-        for pos, d in enumerate(order):  # qualifs simulées -> grille
+        for pos, d in enumerate(order):
             d["grid"] = pos + 1
             self.plan_stops(d)
             d["cum"] = [0.0]
-            d["start_offset"] = (pos + 1) * 0.28  # retard de départ selon la place
+            d["start_offset"] = (pos + 1) * 0.28
         forced = {}
         for e in self.cfg["forced_events"]:
             forced.setdefault(int(e["lap"]), []).append(e)
@@ -218,7 +201,6 @@ class Race:
                 break
             leader_t = alive[0]["cum"][-1]
 
-            # --- Safety Car : déclenchement
             trigger_sc = sc_left == 0 and self.cfg["safety_car"] and lap > 1 and (
                 self.rng.random() < 0.025 * self.chaos
                 or any(e["type"] == "safety_car" for e in forced.get(lap, [])))
@@ -231,10 +213,9 @@ class Race:
             for d in alive:
                 lt = self.base_lap(d, lap, raining)
                 if lap == 1:
-                    lt += d["start_offset"] + 2.0  # départ arrêté
+                    lt += d["start_offset"] + 2.0
                 extra, notes = self._incidents(d, lap, forced, raining, alive, leader_t)
                 lt += extra
-                # arrêt aux stands prévu (ou imposé par pluie / crevaison)
                 if lap in d["stop_plan"] or "pit" in notes or self._wants_wets(d, raining):
                     new = "W" if raining else self.rng.choice(["M", "H"] if lap < self.laps * 0.6 else ["S", "M"])
                     cost = PIT_LOSS * (0.55 if sc_active else 1.0)
@@ -248,7 +229,6 @@ class Race:
                 d["tyre_age"] += 1
                 lap_times[d["code"]] = lt
 
-            # --- Application du tour (Safety Car : peloton regroupé)
             prev_new = None
             for d in sorted(alive, key=lambda d: d["cum"][-1]):
                 if not d["alive"]:
@@ -288,15 +268,13 @@ class Race:
         return False
 
     def _incidents(self, d, lap, forced, raining, alive, leader_t):
-        """Incidents inattendus pour un pilote sur un tour. Retourne (secondes perdues, notes)."""
         extra, notes = 0.0, set()
         chaos = self.chaos
         rel = d["reliab"]
         t = d["cum"][-1]
-        forced_here = [e for e in forced.get(lap, []) if e.get("driver") == d["code"]]
+        forced_here = [e for e in forced.get(lap, []) if e.get("driver"] == d["code"]]
         kinds = {e["type"] for e in forced_here}
 
-        # panne mécanique : plus probable si la voiture est usée
         p_mech = 0.0035 * chaos * (0.6 + d["wear"] / 40.0) / max(rel, 0.1)
         if "mechanical" in kinds or self.rng.random() < p_mech:
             d["dnf_this_lap"] = self.rng.uniform(0.15, 0.9)
@@ -304,7 +282,6 @@ class Race:
             self.log(lap, t, "dnf", f"ABANDON de {d['code']} : {d['retire_reason']}.", d["code"])
             return 0.0, notes
 
-        # collision : touche aussi un voisin
         p_col = (0.0045 + (0.006 if raining else 0.0)) * chaos * (1.15 - d["skill"])
         if "collision" in kinds or (lap == 1 and self.rng.random() < p_col * 3) or self.rng.random() < p_col:
             heavy = self.rng.random() < 0.35
@@ -332,7 +309,6 @@ class Race:
             d["penalty_s"] += 5.0
         return extra, notes
 
-    # -- sortie --------------------------------------------------------
     def build_output(self):
         c = self.circuit
         length = c["length_m"]
@@ -345,16 +321,15 @@ class Race:
         for d in self.drivers:
             knots_t = np.asarray(d["cum"], dtype=float)
             knots_d = np.arange(len(knots_t), dtype=float) * length
-            knots_d[0] = -d["grid"] * GRID_GAP_M  # départ : grille derrière la ligne
-            if not d["alive"]:  # abandon en cours de tour : distance partielle
+            knots_d[0] = -d["grid"] * GRID_GAP_M
+            if not d["alive"]:
                 knots_d[-1] = (len(knots_t) - 2 + d["retire_frac"]) * length
-            dist = np.interp(times, knots_t, knots_d)  # figé après abandon / arrivée
-            if d["alive"]:  # après le drapeau à damier : continue un peu (tour de décélération)
+            dist = np.interp(times, knots_t, knots_d)
+            if d["alive"]:
                 after = times > knots_t[-1]
                 dist[after] = knots_d[-1] + (times[after] - knots_t[-1]) * (length / (c["ref_lap_s"] * 1.8))
             frames.append({"code": d["code"], "d": [int(round(v)) for v in dist]})
 
-        # classement final : finisseurs au temps, puis abandons (tours effectués, puis moment)
         def completed(d):
             return len(d["cum"]) - 1 if d["alive"] else len(d["cum"]) - 2
 
@@ -384,7 +359,6 @@ class Race:
             self.log(fl["best_lap"][1], fl["best_lap"][2], "fastest_lap",
                      f"Meilleur tour : {fl['code']} en {fl['best_lap'][0]:.3f} s (tour {fl['best_lap'][1]}).", fl["code"])
 
-        # statistiques mises à jour (même modèle que ton projet C#)
         updated = []
         for r in results:
             d = next(x for x in self.drivers if x["code"] == r["code"])
@@ -403,7 +377,8 @@ class Race:
             updated.append(s_)
 
         events = sorted(self.events, key=lambda e: e["t"])
-        return {
+        
+        output_data = {
             "circuit": {k: c[k] for k in ("name", "location", "country", "length_m", "ref_lap_s", "x", "y", "s", "drs_zones", "corners") if k in c},
             "race": {"laps": self.laps, "weather": self.weather, "rain_laps": sorted(self.rain_laps),
                      "duration_s": round(race_end, 1), "frame_dt": FRAME_DT, "frame_count": len(times)},
@@ -416,6 +391,9 @@ class Race:
             "results": results,
             "updated_drivers": updated,
         }
+        
+        gc.collect()
+        return output_data
 
 
 def main():
@@ -424,7 +402,7 @@ def main():
     ap.add_argument("--circuit", required=True)
     ap.add_argument("--laps", type=int, default=20)
     ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument("--config", default=None, help="JSON d'influences (fichier ou chaîne JSON)")
+    ap.add_argument("--config", default=None, help="JSON d'influences")
     a = ap.parse_args()
 
     drivers = load_drivers(a.drivers)
@@ -434,11 +412,14 @@ def main():
     if a.config:
         config = json.loads(a.config) if a.config.strip().startswith("{") else json.load(open(a.config, encoding="utf-8"))
     seed = a.seed if a.seed is not None else random.randrange(1, 10**9)
+    
     race = Race(drivers, circuit, max(1, a.laps), seed, config)
     race.run()
     out = race.build_output()
     out["race"]["seed"] = seed
+    
     print(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
+    gc.collect()
 
 
 if __name__ == "__main__":
