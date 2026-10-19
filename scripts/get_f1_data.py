@@ -18,6 +18,11 @@ def enable_cache():
         os.makedirs(cache_dir, exist_ok=True)
         if os.access(cache_dir, os.W_OK):
             fastf1.Cache.enable_cache(cache_dir)
+            
+            # Indispensable pour éviter le blocage 403 de CloudFront sur Render
+            fastf1.req.headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
     except OSError:
         pass
 
