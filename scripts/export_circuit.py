@@ -28,7 +28,7 @@ def enable_cache():
         os.makedirs(cache_dir, exist_ok=True)
         if os.access(cache_dir, os.W_OK):
             fastf1.Cache.enable_cache(cache_dir)
-            # Indispensable pour éviter le blocage 403 de CloudFront sur Render
+            # Headers anti-blocage CloudFront pour FastF1
             fastf1.req.headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
@@ -70,7 +70,7 @@ def export(year, gp):
             s = fastf1.get_session(int(year), gp, code)
             s.load(telemetry=True, weather=False, messages=False)
             
-            # On essaie d'abord le tour le plus rapide
+            # Essai prioritaire sur le tour le plus rapide
             best_lap = s.laps.pick_fastest()
             if best_lap is not None:
                 try:
@@ -81,7 +81,7 @@ def export(year, gp):
                 except Exception:
                     pass
 
-            # Fallback : on parcourt les tours pour en trouver un avec de la télémétrie valide
+            # Repli : parcours des tours pour trouver une télémétrie exploitable
             for _, lap_obj in s.laps.iterlaps():
                 try:
                     t_test = lap_obj.get_telemetry()
