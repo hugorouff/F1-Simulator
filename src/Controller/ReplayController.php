@@ -135,7 +135,6 @@ class ReplayController extends AbstractController
 
             $json = $this->applyTeamColors($this->python->run('sim_engine.py', $args, 120));
         } catch (\Throwable $e) {
-            // Renvoi d'un JSON propre avec le message d'erreur au lieu d'un code 500 brut
             return new JsonResponse([
                 'status' => 'error',
                 'error' => $e->getMessage()
@@ -290,10 +289,19 @@ class ReplayController extends AbstractController
         if (!is_dir($dir)) {
             mkdir($dir, 0775, true);
         }
-        $file = sprintf('%s/%d_%s.json', $dir, $year, preg_replace('/[^a-z0-9]+/', '_', mb_strtolower($gp)));
+        
+        $filename = sprintf('%d_%s.json', $year, preg_replace('/[^a-z0-9]+/', '_', mb_strtolower($gp)));
+        $file = $dir . '/' . $filename;
 
         if (!is_file($file)) {
-            $this->python->run('export_circuit.py', [(string) $year, $gp, $file], 300);
+            // Tentative d'exécution locale du script de téléchargement FastF1
+            try {
+                $this->python->run('export_circuit.py', [(string) $year, $gp, $file], 300);
+            } catch (\Throwable $e) {
+                if (!is_file($file)) {
+                    throw $e;
+                }
+            }
         }
 
         return $file;
