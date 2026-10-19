@@ -26,7 +26,6 @@ class ReplayController extends AbstractController
         'career_races', 'dnf', 'career_podiums', 'championships',
     ];
 
-    /** Couleurs officielles par id d'écurie (utilisées si ecuries.json n'a pas de champ "color"). */
     private const TEAM_COLORS = [
         'red-bull' => '#3671C6',
         'mercedes' => '#27F4D2',
@@ -41,7 +40,6 @@ class ReplayController extends AbstractController
         'cadillac-f1-team' => '#C9A227',
     ];
 
-    /** Couleurs de repli pour les écuries créées sans couleur ni id connu. */
     private const FALLBACK_PALETTE = [
         '#E8002D', '#27F4D2', '#FF8000', '#3671C6', '#229971', '#FF87BC',
         '#64C4FF', '#52E252', '#B6BABD', '#C9A227', '#9B5DE5', '#F15BB5',
@@ -83,10 +81,6 @@ class ReplayController extends AbstractController
         }
     }
 
-    /**
-     * Génère une course complète : tracé (réel ou démo) + simulation.
-     * Retourne le JSON produit par sim_engine.py, avec les couleurs d'écurie appliquées.
-     */
     #[Route('/api/replay/simulate', name: 'api_replay_simulate', methods: ['GET'])]
     public function simulate(Request $request, EntityManagerInterface $entityManager): Response
     {
@@ -114,7 +108,6 @@ class ReplayController extends AbstractController
                 ? $this->demoCircuit()
                 : $this->realCircuit($q->getInt('year', 2020), trim((string) $q->get('gp', 'Monza')));
 
-            // Roster avec le champ "team" reconstruit depuis "team_id"
             $enrichedRosterFile = $this->writeEnrichedRoster();
             $driversFile = $enrichedRosterFile;
 
@@ -142,7 +135,11 @@ class ReplayController extends AbstractController
 
             $json = $this->applyTeamColors($this->python->run('sim_engine.py', $args, 120));
         } catch (\Throwable $e) {
-            return new JsonResponse(['error' => $e->getMessage()], 500);
+            // Renvoi d'un JSON propre avec le message d'erreur au lieu d'un code 500 brut
+            return new JsonResponse([
+                'status' => 'error',
+                'error' => $e->getMessage()
+            ], 500);
         } finally {
             foreach ([$temporaryDriversFile, $enrichedRosterFile] as $tmp) {
                 if ($tmp !== null && is_file($tmp)) {
@@ -154,9 +151,6 @@ class ReplayController extends AbstractController
         return new Response($json, 200, ['Content-Type' => 'application/json; charset=utf-8']);
     }
 
-    /**
-     * Enregistre les statistiques mises à jour après la course dans data/pilotes.json.
-     */
     #[Route('/api/replay/commit', name: 'api_replay_commit', methods: ['POST'])]
     public function commit(Request $request): JsonResponse
     {
@@ -298,7 +292,7 @@ class ReplayController extends AbstractController
         }
         $file = sprintf('%s/%d_%s.json', $dir, $year, preg_replace('/[^a-z0-9]+/', '_', mb_strtolower($gp)));
 
-        if (!is_file($file)) { // premier appel : téléchargement FastF1 (1 à 2 min), puis cache disque
+        if (!is_file($file)) {
             $this->python->run('export_circuit.py', [(string) $year, $gp, $file], 300);
         }
 
@@ -387,12 +381,6 @@ class ReplayController extends AbstractController
         return is_array($data) ? $data : [];
     }
 
-    /**
-     * Écuries indexées par id : nom + couleur (ecuries.json, sinon couleur officielle, sinon repli).
-     *
-     * @return array<string,array{id:string,name:string,color:string}>
-     */
-
     private function teamsIndex(): array
     {
         $file = $this->python->projectDir() . '/data/ecuries.json';
@@ -405,7 +393,6 @@ class ReplayController extends AbstractController
             }
             $id = (string) $team['id'];
             
-            // Récupère la couleur unique définie dans ecuries.json, ou utilise la couleur par défaut
             $color = $team['color'] ?? null;
             if (!is_string($color) || !preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
                 $color = self::TEAM_COLORS[$id] ?? self::FALLBACK_PALETTE[crc32($id) % count(self::FALLBACK_PALETTE)];
@@ -421,13 +408,6 @@ class ReplayController extends AbstractController
         return $index;
     }
 
-    /**
-     * Écurie d'un pilote : par team_id, ou (ancien format) par nom d'écurie.
-     *
-     * @param array<string,mixed> $driver
-     * @param array<string,array{id:string,name:string,color:string}> $teams
-     * @return array{id:string,name:string,color:string}|null
-     */
     private function teamOf(array $driver, array $teams): ?array
     {
         $teamId = $driver['team_id'] ?? null;
@@ -446,7 +426,6 @@ class ReplayController extends AbstractController
         return null;
     }
 
-    /** Copie temporaire du roster avec "team" = nom de l'écurie, pour sim_engine.py. */
     private function writeEnrichedRoster(): string
     {
         $teams = $this->teamsIndex();
@@ -471,7 +450,6 @@ class ReplayController extends AbstractController
         return $file;
     }
 
-    /** Applique la couleur et le nom d'écurie de chaque pilote dans le JSON renvoyé par la simulation. */
     private function applyTeamColors(string $json): string
     {
         $data = json_decode($json, true);
