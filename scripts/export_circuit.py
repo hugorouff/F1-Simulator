@@ -2,8 +2,8 @@
 
 Usage : python export_circuit.py <année> <grand_prix> [fichier_sortie.json]
 
-Le tracé vient du tour le plus rapide des qualifications (même méthode que
-f1-race-replay). Sans fichier de sortie, le JSON est écrit sur stdout.
+Le tracé vient du tour le plus rapide des qualifications ou de la course.
+Sans fichier de sortie, le JSON est écrit sur stdout.
 """
 import gc
 import json
@@ -28,6 +28,10 @@ def enable_cache():
         os.makedirs(cache_dir, exist_ok=True)
         if os.access(cache_dir, os.W_OK):
             fastf1.Cache.enable_cache(cache_dir)
+            # Indispensable pour éviter le blocage 403 de CloudFront sur Render
+            fastf1.req.headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
     except OSError:
         pass
 
@@ -60,21 +64,40 @@ def drs_zones(drs, n_src, n_dst=N_POINTS):
 def export(year, gp):
     enable_cache()
 
-    session, lap = None, None
+    session, lap, tel = None, None, None
     for code in ("Q", "R"):
         try:
             s = fastf1.get_session(int(year), gp, code)
             s.load(telemetry=True, weather=False, messages=False)
-            lap = s.laps.pick_fastest()
-            if lap is not None:
-                session = s
+            
+            # On essaie d'abord le tour le plus rapide
+            best_lap = s.laps.pick_fastest()
+            if best_lap is not None:
+                try:
+                    t_test = best_lap.get_telemetry()
+                    if t_test is not None and not t_test.empty and "X" in t_test and "Y" in t_test:
+                        lap, tel, session = best_lap, t_test, s
+                        break
+                except Exception:
+                    pass
+
+            # Fallback : on parcourt les tours pour en trouver un avec de la télémétrie valide
+            for _, lap_obj in s.laps.iterlaps():
+                try:
+                    t_test = lap_obj.get_telemetry()
+                    if t_test is not None and not t_test.empty and "X" in t_test and "Y" in t_test:
+                        lap, tel, session = lap_obj, t_test, s
+                        break
+                except Exception:
+                    continue
+            if session is not None:
                 break
         except Exception:
             continue
-    if session is None or lap is None:
+
+    if session is None or lap is None or tel is None:
         raise RuntimeError("Aucun tour valide trouvé pour ce Grand Prix.")
 
-    tel = lap.get_telemetry()
     x, y, s_grid, length_units = resample(tel["X"], tel["Y"], tel["Distance"])
     ref_lap = lap["LapTime"].total_seconds()
 
