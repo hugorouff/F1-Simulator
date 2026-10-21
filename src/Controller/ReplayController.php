@@ -57,17 +57,30 @@ class ReplayController extends AbstractController
         if (!isset($circuits[$selectedCircuit]) && $circuits !== []) {
             $selectedCircuit = array_key_first($circuits);
         }
-
+    
         $courseId = $request->query->getInt('course_id');
         $divisionId = $request->query->getInt('division_id');
-
+    
+        // Résolution dynamique des écuries pour l'affichage
+        $teams = $this->teamsIndex();
+        $drivers = $this->readDrivers();
+        foreach ($drivers as &$driver) {
+            $team = $this->teamOf($driver, $teams);
+            if ($team !== null) {
+                $driver['display_team'] = $team['name'];
+            } else {
+                $driver['display_team'] = $driver['team'] ?? $driver['ecurie'] ?? 'Indépendant';
+            }
+        }
+        unset($driver);
+    
         return $this->render('replay/index.html.twig', [
             'circuits' => $circuits,
             'selected_circuit' => $selectedCircuit,
             'course_id' => $courseId > 0 ? $courseId : null,
             'division_id' => $divisionId > 0 ? $divisionId : null,
             'season_csrf_token' => $csrfTokenManager->getToken('record_season_results')->getValue(),
-            'drivers' => $this->readDrivers(),
+            'drivers' => $drivers,
         ]);
     }
 
@@ -201,23 +214,40 @@ class ReplayController extends AbstractController
     {
         $dir = $this->python->projectDir() . '/public/circuits';
         $circuits = [];
-
+    
         if (is_dir($dir)) {
-            foreach (glob($dir . '/*.json') as $file) {
+            // Scanne les .json ET les .geojson
+            $files = array_merge(glob($dir . '/*.json') ?: [], glob($dir . '/*.geojson') ?: []);
+            
+            foreach ($files as $file) {
                 $content = json_decode((string) file_get_contents($file), true);
-                if (is_array($content)) {
-                    $slug = pathinfo($file, PATHINFO_FILENAME);
-                    if ($slug === 'demo') {
-                        continue;
-                    }
-                    $circuits[$slug] = [
-                        'slug' => $slug,
-                        'name' => $content['name'] ?? ucfirst(str_replace('_', ' ', $slug)),
-                        'length_m' => $content['length_m'] ?? 0,
-                    ];
+                if (!is_array($content)) {
+                    continue;
                 }
+    
+                $slug = pathinfo($file, PATHINFO_FILENAME);
+                if ($slug === 'demo') {
+                    continue;
+                }
+    
+                // Gestion si c'est un GeoJSON (FeatureCollection)
+                $name = $content['name'] ?? null;
+                $length = $content['length_m'] ?? 0;
+    
+                if ($name === null && isset($content['features'][0]['properties'])) {
+                    $props = $content['features'][0]['properties'];
+                    $name = $props['Name'] ?? $props['Location'] ?? ucfirst(str_replace('_', ' ', $slug));
+                    $length = $props['length'] ?? 0;
+                }
+    
+                $circuits[$slug] = [
+                    'slug' => $slug,
+                    'name' => $name ?: ucfirst(str_replace(['_', '-'], ' ', $slug)),
+                    'length_m' => (float) $length,
+                ];
             }
         }
+    
         uasort($circuits, fn($a, $b) => strcmp($a['name'], $b['name']));
         return $circuits;
     }
