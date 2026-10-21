@@ -1,174 +1,235 @@
 {% extends 'base.html.twig' %}
 
-{% block title %}Simulation de course - Bibliothèque Locale{% endblock %}
+{% block title %}Simulation de course{% endblock %}
 
 {% block body %}
-<div class="mb-8 border-l-4 border-f1-red pl-4">
-    <h2 class="text-2xl sm:text-3xl font-extrabold uppercase tracking-wide">
-        Simulation de course
-    </h2>
-    <p class="text-gray-400 text-sm mt-1">
-        Circuits locaux · Pilotes de <code class="text-f1-red">data/pilotes.json</code> · Incidents aléatoires et influences
-    </p>
+<div class="mb-6 border-l-4 border-f1-red pl-4">
+    <h2 class="text-2xl sm:text-3xl font-extrabold uppercase tracking-wide">Simulation de course</h2>
+    <p class="text-gray-400 text-sm mt-1">Circuits locaux · pilotes de data/pilotes.json · incidents aléatoires</p>
 </div>
 
-<div class="bg-f1-card p-4 sm:p-6 rounded-xl border border-f1-border mb-8 shadow-lg">
-    <form method="GET" action="{{ path('app_replay') }}" id="sim-form" class="space-y-6">
-        
-        {# Grille Principale #}
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            
-            {# Choix du Circuit #}
-            <div>
-                <label for="sim-circuit" class="block text-xs font-semibold text-gray-400 uppercase mb-2">
-                    Circuit
-                </label>
-                <select name="circuit" id="sim-circuit" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
-                    {% for slug, circuit in circuits %}
-                        <option value="{{ slug }}" {{ selected_circuit == slug ? 'selected' }}>
-                            {{ circuit.name }} ({{ (circuit.length_m / 1000)|round(2) }} km)
-                        </option>
-                    {% endfor %}
-                </select>
-            </div>
-
-            {# Tours #}
-            <div>
-                <label for="sim-laps" class="block text-xs font-semibold text-gray-400 uppercase mb-2">
-                    Tours
-                </label>
-                <input type="number" id="sim-laps" name="laps" min="1" max="200" value="15" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
-            </div>
-
-            {# Météo #}
-            <div>
-                <label for="sim-weather" class="block text-xs font-semibold text-gray-400 uppercase mb-2">
-                    Météo
-                </label>
-                <select id="sim-weather" name="weather" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
-                    <option value="dry">Sec</option>
-                    <option value="rain">Pluie</option>
-                    <option value="random">Aléatoire</option>
-                </select>
-            </div>
-        </div>
-
-        {# Configuration des Incidents & Safety Car #}
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-f1-border pt-4">
-            <div>
-                <label for="sim-chaos" class="block text-xs font-semibold text-gray-400 uppercase mb-2">
-                    Chaos (incidents) : <span id="chaos-val">1.0</span>×
-                </label>
-                <input type="range" id="sim-chaos" name="chaos" min="0" max="4" step="0.1" value="1.0" class="w-full accent-f1-red" oninput="document.getElementById('chaos-val').textContent = this.value">
-            </div>
-
-            <div class="flex items-center pt-4">
-                <label class="inline-flex items-center cursor-pointer">
-                    <input type="checkbox" name="safety_car" value="1" checked class="sr-only peer">
-                    <div class="relative w-11 h-6 bg-f1-dark peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-f1-red"></div>
-                    <span class="ms-3 text-sm font-medium text-gray-300">Safety Car</span>
-                </label>
-            </div>
-
-            <div>
-                <label for="sim-seed" class="block text-xs font-semibold text-gray-400 uppercase mb-2">
-                    Graine (optionnel)
-                </label>
-                <input type="number" id="sim-seed" name="seed" placeholder="Aléatoire" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white focus:border-f1-red focus:outline-none">
-            </div>
-        </div>
-
-        {# Influences Avancées (Accordéon) #}
-        <details class="border border-f1-border rounded-lg p-4 bg-f1-dark/40">
-            <summary class="cursor-pointer text-sm font-semibold text-gray-300 uppercase">
-                Influences avancées (événements forcés, modificateurs pilotes)
-            </summary>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                <div>
-                    <label for="sim-events" class="block text-xs font-semibold text-gray-400 mb-1">
-                        Événements forcés (JSON) — types : <code class="text-xs text-f1-red">safety_car, puncture, mechanical, collision, spin, penalty</code>
-                    </label>
-                    <textarea id="sim-events" name="events" rows="3" placeholder='[{"lap": 5, "type": "safety_car"}]' class="w-full bg-f1-dark border border-f1-border rounded-lg p-2 text-xs font-mono text-white focus:border-f1-red focus:outline-none"></textarea>
-                </div>
-                <div>
-                    <label for="sim-mods" class="block text-xs font-semibold text-gray-400 mb-1">
-                        Modificateurs pilotes (JSON) — pace en s/tour (négatif = plus rapide), reliability (>1 = plus fiable)
-                    </label>
-                    <textarea id="sim-mods" name="mods" rows="3" placeholder='{"VER": {"pace": -0.3, "reliability": 1.2}}' class="w-full bg-f1-dark border border-f1-border rounded-lg p-2 text-xs font-mono text-white focus:border-f1-red focus:outline-none"></textarea>
-                </div>
-            </div>
-        </details>
-
-        {# Boutons d'Action #}
-        <div class="flex flex-col sm:flex-row gap-4 pt-2">
-            <button type="submit" id="load-btn" class="flex-1 bg-f1-red hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition uppercase text-sm tracking-wider">
-                Lancer la course
-            </button>
-            <a href="{{ path('app_replay', {demo: 1}) }}" class="bg-f1-dark hover:bg-f1-border text-gray-300 font-semibold py-3 px-4 rounded-lg transition text-center uppercase text-sm tracking-wider border border-f1-border">
-                Circuit de démonstration (hors ligne, instantané)
-            </a>
-        </div>
-    </form>
-
-    <p id="loading" class="hidden text-sm text-gray-400 mt-4 text-center">
-        Lancement de la simulation en cours...
-    </p>
+<div class="bg-f1-card p-4 sm:p-6 rounded-xl border border-f1-border mb-6 shadow-lg">
+  <form id="sim-form" class="space-y-4">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div>
+        <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Circuit</label>
+        <select name="circuit" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white">
+          {% for slug, c in circuits %}
+            <option value="{{ slug }}" {{ selected_circuit == slug ? 'selected' }}>
+              {{ c.name }}{% if c.length_m > 0 %} ({{ (c.length_m / 1000)|round(2) }} km){% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Tours</label>
+        <input type="number" name="laps" min="1" max="200" value="15" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white">
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Météo</label>
+        <select name="weather" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white">
+          <option value="dry">Sec</option><option value="rain">Pluie</option><option value="random">Aléatoire</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Graine (optionnel)</label>
+        <input type="number" name="seed" class="w-full bg-f1-dark border border-f1-border rounded-lg p-3 text-white">
+      </div>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-xs font-semibold text-gray-400 uppercase mb-2">Chaos : <span id="chaos-val">1.0</span>×</label>
+        <input type="range" name="chaos" min="0" max="4" step="0.1" value="1" class="w-full accent-f1-red"
+               oninput="document.getElementById('chaos-val').textContent=this.value">
+      </div>
+      <label class="inline-flex items-center gap-2 text-sm text-gray-300 pt-6">
+        <input type="checkbox" name="safety_car" checked> Safety Car
+      </label>
+    </div>
+    <details class="border border-f1-border rounded-lg p-3">
+      <summary class="cursor-pointer text-sm text-gray-300 uppercase">Influences avancées</summary>
+      <div class="grid md:grid-cols-2 gap-4 mt-3">
+        <textarea name="events" rows="3" placeholder='[{"lap":5,"type":"safety_car"}]' class="bg-f1-dark border border-f1-border rounded-lg p-2 text-xs font-mono text-white"></textarea>
+        <textarea name="mods" rows="3" placeholder='{"VER":{"pace":-0.3,"reliability":1.2}}' class="bg-f1-dark border border-f1-border rounded-lg p-2 text-xs font-mono text-white"></textarea>
+      </div>
+    </details>
+    <div class="flex gap-3">
+      <button type="submit" id="run-btn" class="flex-1 bg-f1-red hover:bg-red-700 text-white font-bold py-3 rounded-lg uppercase text-sm">Lancer la course</button>
+      <button type="button" id="demo-btn" class="border border-f1-border text-gray-300 py-3 px-4 rounded-lg uppercase text-sm">Circuit démo</button>
+    </div>
+  </form>
+  <p id="status" class="text-sm text-gray-400 mt-3 min-h-5"></p>
 </div>
 
-{% if error %}
-    <div class="bg-red-950/50 border border-f1-red text-red-200 rounded-xl p-4 mb-8 text-sm">
-        {{ error }}
+<div id="viewer" class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+  <div class="lg:col-span-2 bg-f1-card rounded-xl border border-f1-border p-3">
+    <canvas id="track" class="w-full rounded-lg bg-f1-dark" style="aspect-ratio:4/3"></canvas>
+    <div class="flex items-center gap-3 mt-3 text-sm text-gray-300">
+      <button id="play" class="bg-f1-red px-4 py-2 rounded-lg font-bold">⏸</button>
+      <input id="seek" type="range" min="0" value="0" class="flex-1 accent-f1-red">
+      <select id="speed" class="bg-f1-dark border border-f1-border rounded p-2">
+        <option value="1">×1</option><option value="4" selected>×4</option>
+        <option value="10">×10</option><option value="30">×30</option>
+      </select>
+      <span id="clock" class="font-mono w-16 text-right">0:00</span>
     </div>
-{% endif %}
+  </div>
+  <div class="bg-f1-card rounded-xl border border-f1-border p-3">
+    <h3 class="font-bold mb-2">Classement live <span id="lapinfo" class="text-xs text-gray-400"></span></h3>
+    <ol id="board" class="text-sm font-mono space-y-1"></ol>
+    <h3 class="font-bold mt-4 mb-2">Événements</h3>
+    <ul id="events" class="text-xs text-gray-300 space-y-1 max-h-48 overflow-y-auto"></ul>
+  </div>
+</div>
 
-<div class="bg-f1-card rounded-xl border border-f1-border overflow-hidden shadow-xl">
-    <div class="px-4 sm:px-6 py-4 border-b border-f1-border">
-        <h3 class="font-bold text-lg">Pilotes engagés</h3>
-    </div>
-    <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm">
-            <thead class="bg-f1-dark text-gray-400 uppercase text-xs tracking-wider border-b border-f1-border">
-                <tr>
-                    <th class="py-3 px-4 sm:px-6">Pilote</th>
-                    <th class="py-3 px-4 sm:px-6">Écurie</th>
-                    <th class="py-3 px-4 sm:px-6">Nationalité</th>
-                    <th class="py-3 px-4 sm:px-6">Points</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-f1-border">
-                {% for driver in drivers %}
-                    <tr class="hover:bg-f1-dark/50 transition">
-                        <td class="py-3 px-4 sm:px-6 font-semibold whitespace-nowrap text-white">
-                            {{ driver.name }}
-                        </td>
-                        <td class="py-3 px-4 sm:px-6 text-gray-300 whitespace-nowrap">{{ driver.display_team }}</td>
-                        <td class="py-3 px-4 sm:px-6 text-gray-400 whitespace-nowrap">{{ driver.nationality ?? 'N/A' }}</td>
-                        <td class="py-3 px-4 sm:px-6 font-mono text-gray-300">{{ driver.points ?? 0 }}</td>
-                    </tr>
-                {% else %}
-                    <tr>
-                        <td colspan="4" class="py-8 text-center text-gray-400">
-                            Aucun pilote configuré dans <code class="text-f1-red">data/pilotes.json</code>.
-                        </td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+<div id="results-box" class="hidden bg-f1-card rounded-xl border border-f1-border overflow-hidden mb-6">
+  <div class="px-4 py-3 border-b border-f1-border font-bold">Résultats</div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-f1-dark text-gray-400 uppercase text-xs">
+        <tr><th class="p-3">Pos</th><th class="p-3">Pilote</th><th class="p-3">Écurie</th><th class="p-3">Grille</th><th class="p-3">Arrêts</th><th class="p-3">Statut</th><th class="p-3">Pts</th></tr>
+      </thead>
+      <tbody id="results" class="divide-y divide-f1-border"></tbody>
+    </table>
+  </div>
 </div>
 
 <script>
 (function () {
-    'use strict';
-    var form = document.getElementById('sim-form');
-    var button = document.getElementById('load-btn');
-    var loading = document.getElementById('loading');
+  'use strict';
+  var form = document.getElementById('sim-form');
+  var statusEl = document.getElementById('status');
+  var canvas = document.getElementById('track');
+  var ctx = canvas.getContext('2d');
+  var data = null, frame = 0, playing = true, last = 0, acc = 0, geo = null, order = [];
 
-    form.addEventListener('submit', function () {
-        loading.classList.remove('hidden');
-        button.classList.add('opacity-50');
-        button.disabled = true;
+  function setStatus(t) { statusEl.textContent = t; }
+
+  function run(demo) {
+    var fd = new FormData(form);
+    var p = new URLSearchParams();
+    fd.forEach(function (v, k) { if (k !== 'safety_car' && v !== '') p.append(k, v); });
+    p.set('safety_car', form.elements.safety_car.checked ? '1' : '0');
+    p.set('demo', demo ? '1' : '0');
+    setStatus('Simulation en cours…');
+    document.getElementById('run-btn').disabled = true;
+
+    fetch('/api/replay/simulate?' + p.toString())
+      .then(function (r) { return r.text().then(function (t) {
+        var j; try { j = JSON.parse(t); } catch (e) { throw new Error('Réponse invalide : ' + t.slice(0, 200)); }
+        if (!r.ok || j.error) throw new Error(j.error || 'Erreur serveur');
+        return j;
+      }); })
+      .then(function (j) { data = j; setup(); setStatus(''); })
+      .catch(function (e) { setStatus('Erreur : ' + e.message); })
+      .finally(function () { document.getElementById('run-btn').disabled = false; });
+  }
+
+  function setup() {
+    var c = data.circuit, xs = c.x, ys = c.y;
+    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+    var W = canvas.width = canvas.clientWidth * 2, H = canvas.height = canvas.clientHeight * 2;
+    var pad = 50, sc = Math.min((W - 2 * pad) / (maxX - minX || 1), (H - 2 * pad) / (maxY - minY || 1));
+    var ox = (W - (maxX - minX) * sc) / 2, oy = (H - (maxY - minY) * sc) / 2;
+    geo = {
+      px: xs.map(function (v) { return ox + (v - minX) * sc; }),
+      py: ys.map(function (v) { return H - (oy + (v - minY) * sc); }),
+      s: c.s, L: c.length_m
+    };
+    frame = 0; acc = 0; playing = true;
+    document.getElementById('play').textContent = '⏸';
+    var seek = document.getElementById('seek');
+    seek.max = data.race.frame_count - 1; seek.value = 0;
+    document.getElementById('viewer').classList.remove('hidden');
+
+    var ev = document.getElementById('events'); ev.textContent = '';
+    data.events.forEach(function (e) {
+      var li = document.createElement('li');
+      li.textContent = 'T' + e.lap + ' · ' + e.text;
+      ev.appendChild(li);
     });
+
+    var tb = document.getElementById('results'); tb.textContent = '';
+    data.results.forEach(function (r) {
+      var tr = document.createElement('tr');
+      [r.position, r.code + ' ' + r.name, r.team, 'P' + r.grid, r.stops,
+       r.status === 'DNF' ? 'DNF (' + (r.reason || '?') + ')' : (r.gap_s == null ? 'Vainqueur' : '+' + r.gap_s.toFixed(3) + ' s'),
+       r.points].forEach(function (v) {
+        var td = document.createElement('td'); td.className = 'p-3'; td.textContent = v; tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+    document.getElementById('results-box').classList.remove('hidden');
+    draw();
+  }
+
+  function pos(dist) {
+    var L = geo.L, m = ((dist % L) + L) % L, s = geo.s, lo = 0, hi = s.length - 1;
+    while (lo < hi - 1) { var mid = (lo + hi) >> 1; if (s[mid] <= m) lo = mid; else hi = mid; }
+    var nxt = (lo + 1) % s.length, span = (nxt === 0 ? L : s[nxt]) - s[lo] || 1, t = (m - s[lo]) / span;
+    return [geo.px[lo] + (geo.px[nxt] - geo.px[lo]) * t, geo.py[lo] + (geo.py[nxt] - geo.py[lo]) * t];
+  }
+
+  function draw() {
+    if (!data) return;
+    var W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath();
+    geo.px.forEach(function (x, i) { i ? ctx.lineTo(x, geo.py[i]) : ctx.moveTo(x, geo.py[i]); });
+    ctx.closePath();
+    ctx.strokeStyle = '#2a2a35'; ctx.lineWidth = 22; ctx.stroke();
+    ctx.strokeStyle = '#555566'; ctx.lineWidth = 14; ctx.stroke();
+
+    var infos = data.drivers.map(function (d, i) {
+      var fr = data.frames.find(function (f) { return f.code === d.code; });
+      return { d: d, dist: fr.d[frame], fr: fr };
+    });
+    infos.forEach(function (o) {
+      var p = pos(o.dist);
+      ctx.beginPath(); ctx.arc(p[0], p[1], 11, 0, 7);
+      ctx.fillStyle = o.d.color; ctx.fill();
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 20px sans-serif';
+      ctx.fillText(o.d.code, p[0] + 14, p[1] - 10);
+    });
+
+    infos.sort(function (a, b) { return b.dist - a.dist; });
+    var board = document.getElementById('board'); board.textContent = '';
+    infos.forEach(function (o, i) {
+      var li = document.createElement('li');
+      var dot = document.createElement('span');
+      dot.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:' + o.d.color;
+      li.appendChild(dot);
+      li.appendChild(document.createTextNode((i + 1) + '. ' + o.d.code));
+      board.appendChild(li);
+    });
+    var lap = Math.min(data.race.laps, Math.max(1, Math.floor(infos[0].dist / geo.L) + 1));
+    document.getElementById('lapinfo').textContent = '· Tour ' + lap + '/' + data.race.laps;
+    var t = frame * data.race.frame_dt;
+    document.getElementById('clock').textContent = Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0');
+    document.getElementById('seek').value = frame;
+  }
+
+  function loop(ts) {
+    if (data && playing) {
+      acc += (ts - last) / 1000 * Number(document.getElementById('speed').value) / data.race.frame_dt;
+      var step = Math.floor(acc);
+      if (step > 0) { acc -= step; frame = Math.min(frame + step, data.race.frame_count - 1); draw(); }
+      if (frame >= data.race.frame_count - 1) playing = false;
+    }
+    last = ts; requestAnimationFrame(loop);
+  }
+
+  form.addEventListener('submit', function (e) { e.preventDefault(); run(false); });
+  document.getElementById('demo-btn').addEventListener('click', function () { run(true); });
+  document.getElementById('play').addEventListener('click', function () {
+    playing = !playing; this.textContent = playing ? '⏸' : '▶';
+  });
+  document.getElementById('seek').addEventListener('input', function () { frame = Number(this.value); draw(); });
+  window.addEventListener('resize', function () { if (data) { setup(); } });
+  requestAnimationFrame(loop);
 })();
 </script>
 {% endblock %}
