@@ -285,23 +285,30 @@ class ReplayController extends AbstractController
             throw new \RuntimeException('Année ou Grand Prix invalide.');
         }
 
-        $dir = $this->python->projectDir() . '/var/circuits';
+        // Changement ici : on pointe vers public/circuits au lieu de var/circuits
+        $dir = $this->python->projectDir() . '/public/circuits';
         if (!is_dir($dir)) {
             mkdir($dir, 0775, true);
         }
-        
-        $filename = sprintf('%d_%s.json', $year, preg_replace('/[^a-z0-9]+/', '_', mb_strtolower($gp)));
-        $file = $dir . '/' . $filename;
 
-        if (!is_file($file)) {
-            // Tentative d'exécution locale du script de téléchargement FastF1
-            try {
-                $this->python->run('export_circuit.py', [(string) $year, $gp, $file], 300);
-            } catch (\Throwable $e) {
-                if (!is_file($file)) {
-                    throw $e;
-                }
+        $slug = preg_replace('/[^a-z0-9]+/', '_', mb_strtolower($gp));
+
+        $candidates = [
+            sprintf('%d_%s.json', $year, $slug),
+            sprintf('%s.json', $slug),
+        ];
+
+        $file = null;
+        foreach ($candidates as $filename) {
+            $path = $dir . '/' . $filename;
+            if (is_file($path)) {
+                $file = $path;
+                break;
             }
+        }
+
+        if ($file === null) {
+            throw new \RuntimeException(sprintf("Le circuit pour '%s' (%d) est introuvable dans la bibliothèque locale.", $gp, $year));
         }
 
         return $file;
@@ -309,7 +316,7 @@ class ReplayController extends AbstractController
 
     private function demoCircuit(): string
     {
-        $dir = $this->python->projectDir() . '/var/circuits';
+        $dir = $this->python->projectDir() . '/public/circuits';
         if (!is_dir($dir)) {
             mkdir($dir, 0775, true);
         }
