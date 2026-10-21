@@ -101,10 +101,17 @@
   var statusEl = document.getElementById('status');
   var canvas = document.getElementById('track');
   var ctx = canvas.getContext('2d');
-  var data = null, frame = 0, playing = true, last = 0, acc = 0, geo = null;
-  var framesByCode = {}, resultsByCode = {};
+  var playBtn = document.getElementById('play');
+  var seekEl = document.getElementById('seek');
+  var speedEl = document.getElementById('speed');
 
-  function setStatus(t) { statusEl.textContent = t; }
+  var data = null, geo = null, trackLayer = null;
+  var t = 0;                 // temps de lecture, en "trames" (fractionnaire)
+  var playing = true, dirty = false, forceBoard = true;
+  var lastTs = 0, lastBoard = 0, dpr = 1, W = 0, H = 0;
+  var cars = [], rows = [], resultsByCode = {};
+
+  function setStatus(msg) { statusEl.textContent = msg; }
 
   function run(demo) {
     var fd = new FormData(form);
@@ -116,8 +123,8 @@
     document.getElementById('run-btn').disabled = true;
 
     fetch('/api/replay/simulate?' + p.toString())
-      .then(function (r) { return r.text().then(function (t) {
-        var j; try { j = JSON.parse(t); } catch (e) { throw new Error('Réponse invalide : ' + t.slice(0, 200)); }
+      .then(function (r) { return r.text().then(function (txt) {
+        var j; try { j = JSON.parse(txt); } catch (e) { throw new Error('Réponse invalide : ' + txt.slice(0, 200)); }
         if (!r.ok || j.error) throw new Error(j.error || 'Erreur serveur');
         return j;
       }); })
@@ -126,30 +133,34 @@
       .finally(function () { document.getElementById('run-btn').disabled = false; });
   }
 
+  /* ---------- Données de la course (une fois par simulation) ---------- */
   function setup() {
-    // IMPORTANT : afficher la zone AVANT de mesurer le canvas
     document.getElementById('viewer').classList.remove('hidden');
 
-    var c = data.circuit, xs = c.x, ys = c.y;
-    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
-    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
-    var W = canvas.width = canvas.clientWidth * 2, H = canvas.height = canvas.clientHeight * 2;
-    var pad = 50, sc = Math.min((W - 2 * pad) / (maxX - minX || 1), (H - 2 * pad) / (maxY - minY || 1));
-    var ox = (W - (maxX - minX) * sc) / 2, oy = (H - (maxY - minY) * sc) / 2;
-    geo = {
-      px: xs.map(function (v) { return ox + (v - minX) * sc; }),
-      py: ys.map(function (v) { return H - (oy + (v - minY) * sc); }),
-      s: c.s, L: c.length_m
-    };
-
-    framesByCode = {}; resultsByCode = {};
-    data.frames.forEach(function (f) { framesByCode[f.code] = f; });
+    resultsByCode = {};
     data.results.forEach(function (r) { resultsByCode[r.code] = r; });
 
-    frame = 0; acc = 0; playing = true;
-    document.getElementById('play').textContent = '⏸';
-    var seek = document.getElementById('seek');
-    seek.max = data.race.frame_count - 1; seek.value = 0;
+    var framesByCode = {};
+    data.frames.forEach(function (f) { framesByCode[f.code] = f; });
+    cars = data.drivers.map(function (d) {
+      return { d: d, fr: framesByCode[d.code], res: resultsByCode[d.code], dist: 0, x: 0, y: 0 };
+    });
+
+    // Lignes du classement : créées une seule fois
+    var board = document.getElementById('board');
+    board.textContent = '';
+    rows = cars.map(function () {
+      var li = document.createElement('li');
+      li.className = 'flex items-center';
+      var dot = document.createElement('span');
+      dot.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px';
+      var name = document.createElement('span');
+      var gap = document.createElement('span');
+      gap.className = 'ml-auto text-gray-400';
+      li.appendChild(dot); li.appendChild(name); li.appendChild(gap);
+      board.appendChild(li);
+      return { dot: dot, name: name, gap: gap };
+    });
 
     var ev = document.getElementById('events'); ev.textContent = '';
     data.events.forEach(function (e) {
@@ -169,115 +180,155 @@
       tb.appendChild(tr);
     });
     document.getElementById('results-box').classList.remove('hidden');
-    draw();
+
+    seekEl.max = data.race.frame_count - 1;
+    seekEl.step = 'any';
+    t = 0; playing = true; playBtn.textContent = '⏸';
+    layout();
   }
 
-  function pos(dist) {
+  /* ---------- Géométrie + tracé pré-rendu (au chargement et au resize) ---------- */
+  function layout() {
+    if (!data) return;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = canvas.width = Math.round(canvas.clientWidth * dpr);
+    H = canvas.height = Math.round(canvas.clientHeight * dpr);
+
+    var c = data.circuit, xs = c.x, ys = c.y;
+    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+    var pad = 25 * dpr;
+    var sc = Math.min((W - 2 * pad) / (maxX - minX || 1), (H - 2 * pad) / (maxY - minY || 1));
+    var ox = (W - (maxX - minX) * sc) / 2, oy = (H - (maxY - minY) * sc) / 2;
+    geo = {
+      px: xs.map(function (v) { return ox + (v - minX) * sc; }),
+      py: ys.map(function (v) { return H - (oy + (v - minY) * sc); }),
+      s: c.s, L: c.length_m
+    };
+
+    // Le tracé ne change jamais : on le dessine une fois hors écran
+    trackLayer = document.createElement('canvas');
+    trackLayer.width = W; trackLayer.height = H;
+    var g = trackLayer.getContext('2d');
+    g.lineJoin = 'round'; g.lineCap = 'round';
+    g.beginPath();
+    geo.px.forEach(function (x, i) { i ? g.lineTo(x, geo.py[i]) : g.moveTo(x, geo.py[i]); });
+    g.closePath();
+    g.strokeStyle = '#2a2a35'; g.lineWidth = 11 * dpr; g.stroke();
+    g.strokeStyle = '#555566'; g.lineWidth = 7 * dpr; g.stroke();
+    g.beginPath(); g.arc(geo.px[0], geo.py[0], 4.5 * dpr, 0, 7);
+    g.fillStyle = '#ffffff'; g.fill();
+
+    dirty = true; forceBoard = true;
+  }
+
+  /* ---------- Position sur le tracé ---------- */
+  function place(car, dist) {
     var L = geo.L, m = ((dist % L) + L) % L, s = geo.s, lo = 0, hi = s.length - 1;
     while (lo < hi - 1) { var mid = (lo + hi) >> 1; if (s[mid] <= m) lo = mid; else hi = mid; }
-    var nxt = (lo + 1) % s.length, span = (nxt === 0 ? L : s[nxt]) - s[lo] || 1, t = (m - s[lo]) / span;
-    return [geo.px[lo] + (geo.px[nxt] - geo.px[lo]) * t, geo.py[lo] + (geo.py[nxt] - geo.py[lo]) * t];
+    var nxt = (lo + 1) % s.length;
+    var span = ((nxt === 0 ? L : s[nxt]) - s[lo]) || 1, k = (m - s[lo]) / span;
+    car.x = geo.px[lo] + (geo.px[nxt] - geo.px[lo]) * k;
+    car.y = geo.py[lo] + (geo.py[nxt] - geo.py[lo]) * k;
   }
 
-  function draw() {
-    if (!data) return;
-    var W = canvas.width, H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
-    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  /* ---------- Dessin (à chaque image) ---------- */
+  function draw(now) {
+    if (!data || !geo) return;
+    var maxI = data.race.frame_count - 1;
+    var i0 = Math.min(Math.floor(t), maxI);
+    var i1 = Math.min(i0 + 1, maxI);
+    var frac = i0 >= maxI ? 0 : t - i0;
 
-    // Tracé
-    ctx.beginPath();
-    geo.px.forEach(function (x, i) { i ? ctx.lineTo(x, geo.py[i]) : ctx.moveTo(x, geo.py[i]); });
-    ctx.closePath();
-    ctx.strokeStyle = '#2a2a35'; ctx.lineWidth = 22; ctx.stroke();
-    ctx.strokeStyle = '#555566'; ctx.lineWidth = 14; ctx.stroke();
+    // Interpolation entre deux trames : mouvement continu
+    for (var n = 0; n < cars.length; n++) {
+      var c = cars[n], a = c.fr.d[i0], b = c.fr.d[i1];
+      c.dist = a + (b - a) * frac;
+      place(c, c.dist);
+    }
+    var ranked = cars.slice().sort(function (p, q) { return q.dist - p.dist; });
 
-    // Ligne de départ / arrivée
-    ctx.beginPath(); ctx.arc(geo.px[0], geo.py[0], 9, 0, 7);
-    ctx.fillStyle = '#ffffff'; ctx.fill();
-
-    // Voitures
-    var infos = data.drivers.map(function (d) {
-      var fr = framesByCode[d.code];
-      return { d: d, fr: fr, dist: fr.d[frame] };
-    });
-    infos.forEach(function (o) {
-      var p = pos(o.dist);
-      ctx.beginPath(); ctx.arc(p[0], p[1], 11, 0, 7);
+    ctx.drawImage(trackLayer, 0, 0);
+    ctx.font = 'bold ' + (10 * dpr) + 'px sans-serif';
+    ctx.lineWidth = 1.5 * dpr;
+    // Le leader est dessiné en dernier (au-dessus)
+    for (var k = ranked.length - 1; k >= 0; k--) {
+      var o = ranked[k];
+      ctx.beginPath(); ctx.arc(o.x, o.y, 5.5 * dpr, 0, 7);
       ctx.fillStyle = o.d.color; ctx.fill();
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 20px sans-serif';
-      ctx.fillText(o.d.code, p[0] + 14, p[1] - 10);
-    });
+      ctx.strokeStyle = '#000'; ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(o.d.code, o.x + 8 * dpr, o.y - 6 * dpr);
+    }
 
-    // Classement live avec écarts
-    infos.sort(function (a, b) { return b.dist - a.dist; });
-    var leader = infos[0];
-    var lastFrame = data.race.frame_count - 1;
+    seekEl.value = t;
+
+    // Textes : seulement 5 fois par seconde (ou immédiatement si on déplace la barre)
+    if (forceBoard || now - lastBoard > 200) {
+      updateBoard(ranked, i0, maxI);
+      lastBoard = now; forceBoard = false;
+    }
+  }
+
+  function updateBoard(ranked, i0, maxI) {
+    var leader = ranked[0], dt = data.race.frame_dt;
 
     // Temps écoulé depuis que le leader est passé là où se trouve la voiture o
     function gapTo(o) {
-      var a = leader.fr.d, target = o.dist, lo = 0, hi = frame;
-      if (a[hi] < target) return 0;
+      var arr = leader.fr.d, target = o.dist, lo = 0, hi = i0;
+      if (arr[hi] < target) return 0;
       while (lo < hi) {
         var mid = (lo + hi) >> 1;
-        if (a[mid] >= target) hi = mid; else lo = mid + 1;
+        if (arr[mid] >= target) hi = mid; else lo = mid + 1;
       }
-      return (frame - lo) * data.race.frame_dt;
+      return (i0 - lo) * dt;
     }
 
-    var board = document.getElementById('board'); board.textContent = '';
-    infos.forEach(function (o, i) {
-      var li = document.createElement('li');
-      li.className = 'flex items-center';
-
-      var dot = document.createElement('span');
-      dot.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:' + o.d.color;
-      li.appendChild(dot);
-
-      var name = document.createElement('span');
-      name.textContent = (i + 1) + '. ' + o.d.code;
-      li.appendChild(name);
-
-      var gap = document.createElement('span');
-      gap.className = 'ml-auto text-gray-400';
-      var res = resultsByCode[o.d.code];
-      var retired = res && res.status === 'DNF' && o.fr.d[frame] === o.fr.d[lastFrame];
+    ranked.forEach(function (o, i) {
+      var r = rows[i];
+      r.dot.style.background = o.d.color;
+      r.name.textContent = (i + 1) + '. ' + o.d.code;
+      var retired = o.res && o.res.status === 'DNF' && o.fr.d[i0] === o.fr.d[maxI];
       var lapsDown = Math.floor((leader.dist - o.dist) / geo.L);
-      if (retired) gap.textContent = 'ABD';
-      else if (i === 0) gap.textContent = 'Leader';
-      else if (lapsDown >= 1) gap.textContent = '+' + lapsDown + ' T';
-      else gap.textContent = '+' + gapTo(o).toFixed(1) + 's';
-      li.appendChild(gap);
-
-      board.appendChild(li);
+      var txt;
+      if (retired) txt = 'ABD';
+      else if (i === 0) txt = 'Leader';
+      else if (lapsDown >= 1) txt = '+' + lapsDown + ' T';
+      else txt = '+' + gapTo(o).toFixed(1) + 's';
+      r.gap.textContent = txt;
     });
 
     var lap = Math.min(data.race.laps, Math.max(1, Math.floor(leader.dist / geo.L) + 1));
     document.getElementById('lapinfo').textContent = '· Tour ' + lap + '/' + data.race.laps;
-    var t = frame * data.race.frame_dt;
-    document.getElementById('clock').textContent = Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0');
-    document.getElementById('seek').value = frame;
+    var sec = t * dt;
+    document.getElementById('clock').textContent =
+      Math.floor(sec / 60) + ':' + String(Math.floor(sec % 60)).padStart(2, '0');
   }
 
+  /* ---------- Boucle d'animation ---------- */
   function loop(ts) {
+    var delta = Math.min((ts - lastTs) / 1000, 0.1); // évite les sauts (onglet inactif)
+    lastTs = ts;
     if (data && playing) {
-      acc += (ts - last) / 1000 * Number(document.getElementById('speed').value) / data.race.frame_dt;
-      var step = Math.floor(acc);
-      if (step > 0) { acc -= step; frame = Math.min(frame + step, data.race.frame_count - 1); draw(); }
-      if (frame >= data.race.frame_count - 1) playing = false;
+      var maxI = data.race.frame_count - 1;
+      t += delta * Number(speedEl.value) / data.race.frame_dt;
+      if (t >= maxI) { t = maxI; playing = false; playBtn.textContent = '▶'; forceBoard = true; }
+      dirty = true;
     }
-    last = ts; requestAnimationFrame(loop);
+    if (dirty) { dirty = false; draw(ts); }
+    requestAnimationFrame(loop);
   }
 
   form.addEventListener('submit', function (e) { e.preventDefault(); run(false); });
   document.getElementById('demo-btn').addEventListener('click', function () { run(true); });
-  document.getElementById('play').addEventListener('click', function () {
-    playing = !playing; this.textContent = playing ? '⏸' : '▶';
+  playBtn.addEventListener('click', function () {
+    if (!data) return;
+    if (t >= data.race.frame_count - 1) t = 0;   // relance depuis le début
+    playing = !playing;
+    playBtn.textContent = playing ? '⏸' : '▶';
   });
-  document.getElementById('seek').addEventListener('input', function () { frame = Number(this.value); draw(); });
-  window.addEventListener('resize', function () { if (data) { var f = frame; setup(); frame = f; draw(); } });
+  seekEl.addEventListener('input', function () { t = Number(this.value); dirty = true; forceBoard = true; });
+  window.addEventListener('resize', function () { layout(); });
   requestAnimationFrame(loop);
 })();
 </script>
-{% endblock %}
