@@ -101,7 +101,8 @@
   var statusEl = document.getElementById('status');
   var canvas = document.getElementById('track');
   var ctx = canvas.getContext('2d');
-  var data = null, frame = 0, playing = true, last = 0, acc = 0, geo = null, order = [];
+  var data = null, frame = 0, playing = true, last = 0, acc = 0, geo = null;
+  var framesByCode = {}, resultsByCode = {};
 
   function setStatus(t) { statusEl.textContent = t; }
 
@@ -126,6 +127,9 @@
   }
 
   function setup() {
+    // IMPORTANT : afficher la zone AVANT de mesurer le canvas
+    document.getElementById('viewer').classList.remove('hidden');
+
     var c = data.circuit, xs = c.x, ys = c.y;
     var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
     var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
@@ -137,11 +141,15 @@
       py: ys.map(function (v) { return H - (oy + (v - minY) * sc); }),
       s: c.s, L: c.length_m
     };
+
+    framesByCode = {}; resultsByCode = {};
+    data.frames.forEach(function (f) { framesByCode[f.code] = f; });
+    data.results.forEach(function (r) { resultsByCode[r.code] = r; });
+
     frame = 0; acc = 0; playing = true;
     document.getElementById('play').textContent = '⏸';
     var seek = document.getElementById('seek');
     seek.max = data.race.frame_count - 1; seek.value = 0;
-    document.getElementById('viewer').classList.remove('hidden');
 
     var ev = document.getElementById('events'); ev.textContent = '';
     data.events.forEach(function (e) {
@@ -176,15 +184,22 @@
     var W = canvas.width, H = canvas.height;
     ctx.clearRect(0, 0, W, H);
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+
+    // Tracé
     ctx.beginPath();
     geo.px.forEach(function (x, i) { i ? ctx.lineTo(x, geo.py[i]) : ctx.moveTo(x, geo.py[i]); });
     ctx.closePath();
     ctx.strokeStyle = '#2a2a35'; ctx.lineWidth = 22; ctx.stroke();
     ctx.strokeStyle = '#555566'; ctx.lineWidth = 14; ctx.stroke();
 
-    var infos = data.drivers.map(function (d, i) {
-      var fr = data.frames.find(function (f) { return f.code === d.code; });
-      return { d: d, dist: fr.d[frame], fr: fr };
+    // Ligne de départ / arrivée
+    ctx.beginPath(); ctx.arc(geo.px[0], geo.py[0], 9, 0, 7);
+    ctx.fillStyle = '#ffffff'; ctx.fill();
+
+    // Voitures
+    var infos = data.drivers.map(function (d) {
+      var fr = framesByCode[d.code];
+      return { d: d, fr: fr, dist: fr.d[frame] };
     });
     infos.forEach(function (o) {
       var p = pos(o.dist);
@@ -195,17 +210,50 @@
       ctx.fillText(o.d.code, p[0] + 14, p[1] - 10);
     });
 
+    // Classement live avec écarts
     infos.sort(function (a, b) { return b.dist - a.dist; });
+    var leader = infos[0];
+    var lastFrame = data.race.frame_count - 1;
+
+    // Temps écoulé depuis que le leader est passé là où se trouve la voiture o
+    function gapTo(o) {
+      var a = leader.fr.d, target = o.dist, lo = 0, hi = frame;
+      if (a[hi] < target) return 0;
+      while (lo < hi) {
+        var mid = (lo + hi) >> 1;
+        if (a[mid] >= target) hi = mid; else lo = mid + 1;
+      }
+      return (frame - lo) * data.race.frame_dt;
+    }
+
     var board = document.getElementById('board'); board.textContent = '';
     infos.forEach(function (o, i) {
       var li = document.createElement('li');
+      li.className = 'flex items-center';
+
       var dot = document.createElement('span');
       dot.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:' + o.d.color;
       li.appendChild(dot);
-      li.appendChild(document.createTextNode((i + 1) + '. ' + o.d.code));
+
+      var name = document.createElement('span');
+      name.textContent = (i + 1) + '. ' + o.d.code;
+      li.appendChild(name);
+
+      var gap = document.createElement('span');
+      gap.className = 'ml-auto text-gray-400';
+      var res = resultsByCode[o.d.code];
+      var retired = res && res.status === 'DNF' && o.fr.d[frame] === o.fr.d[lastFrame];
+      var lapsDown = Math.floor((leader.dist - o.dist) / geo.L);
+      if (retired) gap.textContent = 'ABD';
+      else if (i === 0) gap.textContent = 'Leader';
+      else if (lapsDown >= 1) gap.textContent = '+' + lapsDown + ' T';
+      else gap.textContent = '+' + gapTo(o).toFixed(1) + 's';
+      li.appendChild(gap);
+
       board.appendChild(li);
     });
-    var lap = Math.min(data.race.laps, Math.max(1, Math.floor(infos[0].dist / geo.L) + 1));
+
+    var lap = Math.min(data.race.laps, Math.max(1, Math.floor(leader.dist / geo.L) + 1));
     document.getElementById('lapinfo').textContent = '· Tour ' + lap + '/' + data.race.laps;
     var t = frame * data.race.frame_dt;
     document.getElementById('clock').textContent = Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0');
@@ -228,7 +276,7 @@
     playing = !playing; this.textContent = playing ? '⏸' : '▶';
   });
   document.getElementById('seek').addEventListener('input', function () { frame = Number(this.value); draw(); });
-  window.addEventListener('resize', function () { if (data) { setup(); } });
+  window.addEventListener('resize', function () { if (data) { var f = frame; setup(); frame = f; draw(); } });
   requestAnimationFrame(loop);
 })();
 </script>
