@@ -53,15 +53,15 @@ class ReplayController extends AbstractController
     public function index(Request $request, CsrfTokenManagerInterface $csrfTokenManager): Response
     {
         $circuits = $this->getLocalCircuits();
-        $selectedCircuit = trim((string) $request->query->get('circuit', 'bahrain_grand_prix'));
+        $selectedCircuit = trim((string) $request->query->get('circuit', ''));
         if (!isset($circuits[$selectedCircuit]) && $circuits !== []) {
             $selectedCircuit = array_key_first($circuits);
         }
-    
+
         $courseId = $request->query->getInt('course_id');
         $divisionId = $request->query->getInt('division_id');
-    
-        // Résolution dynamique des écuries pour l'affichage
+
+        // Association des écuries aux pilotes pour la vue
         $teams = $this->teamsIndex();
         $drivers = $this->readDrivers();
         foreach ($drivers as &$driver) {
@@ -73,7 +73,7 @@ class ReplayController extends AbstractController
             }
         }
         unset($driver);
-    
+
         return $this->render('replay/index.html.twig', [
             'circuits' => $circuits,
             'selected_circuit' => $selectedCircuit,
@@ -214,32 +214,30 @@ class ReplayController extends AbstractController
     {
         $dir = $this->python->projectDir() . '/public/circuits';
         $circuits = [];
-    
+
         if (is_dir($dir)) {
-            // Scanne les .json ET les .geojson
             $files = array_merge(glob($dir . '/*.json') ?: [], glob($dir . '/*.geojson') ?: []);
-            
             foreach ($files as $file) {
                 $content = json_decode((string) file_get_contents($file), true);
                 if (!is_array($content)) {
                     continue;
                 }
-    
+
                 $slug = pathinfo($file, PATHINFO_FILENAME);
                 if ($slug === 'demo') {
                     continue;
                 }
-    
-                // Gestion si c'est un GeoJSON (FeatureCollection)
+
                 $name = $content['name'] ?? null;
                 $length = $content['length_m'] ?? 0;
-    
+
+                // Support GeoJSON
                 if ($name === null && isset($content['features'][0]['properties'])) {
                     $props = $content['features'][0]['properties'];
-                    $name = $props['Name'] ?? $props['Location'] ?? ucfirst(str_replace('_', ' ', $slug));
+                    $name = $props['Name'] ?? $props['Location'] ?? ucfirst(str_replace(['_', '-'], ' ', $slug));
                     $length = $props['length'] ?? 0;
                 }
-    
+
                 $circuits[$slug] = [
                     'slug' => $slug,
                     'name' => $name ?: ucfirst(str_replace(['_', '-'], ' ', $slug)),
@@ -247,7 +245,7 @@ class ReplayController extends AbstractController
                 ];
             }
         }
-    
+
         uasort($circuits, fn($a, $b) => strcmp($a['name'], $b['name']));
         return $circuits;
     }
@@ -259,13 +257,92 @@ class ReplayController extends AbstractController
         }
 
         $dir = $this->python->projectDir() . '/public/circuits';
-        $path = $dir . '/' . $circuitSlug . '.json';
+        $jsonFile = $dir . '/' . $circuitSlug . '.json';
+        $geoJsonFile = $dir . '/' . $circuitSlug . '.geojson';
 
-        if (!is_file($path)) {
-            throw new \RuntimeException(sprintf("Le circuit '%s' est introuvable dans la bibliothèque locale.", $circuitSlug));
+        if (is_file($jsonFile)) {
+            return $jsonFile;
         }
 
-        return $path;
+        if (is_file($geoJsonFile)) {
+            return $this->convertGeoJsonToEngineFormat($geoJsonFile, $circuitSlug);
+        }
+
+        throw new \RuntimeException(sprintf("Le circuit '%s' est introuvable dans la bibliothèque locale.", $circuitSlug));
+    }
+
+    private function convertGeoJsonToEngineFormat(string $geoJsonPath, string $slug): string
+    {
+        $content = json_decode((string) file_get_contents($geoJsonPath), true);
+        if (!is_array($content) || !isset($content['features'][0]['geometry']['coordinates'])) {
+            throw new \RuntimeException("Fichier GeoJSON invalide ou corrompu.");
+        }
+
+        $feature = $content['features'][0];
+        $props = $feature['properties'] ?? [];
+        $coords = $feature['geometry']['coordinates'] ?? [];
+        
+        $name = $props['Name'] ?? $props['Location'] ?? ucfirst(str_replace(['_', '-'], ' ', $slug));
+        $lengthM = (float) ($props['length'] ?? 5000);
+
+        $xRaw = [];
+        $yRaw = [];
+        $refLon = $coords[0][0] ?? 0;
+        $refLat = $coords[0][1] ?? 0;
+        $latRad = deg2rad($refLat);
+
+        foreach ($coords as $pt) {
+            $xRaw[] = ($pt[0] - $refLon) * 111000 * cos($latRad);
+            $yRaw[] = ($pt[1] - $refLat) * 111000;
+        }
+
+        $nPoints = 700;
+        $totalRaw = count($xRaw);
+        $x = [];
+        $y = [];
+        for ($i = 0; $i < $nPoints; $i++) {
+            $idx = (int) floor(($i / $nPoints) * $totalRaw);
+            $x[] = round((float) $xRaw[$idx], 1);
+            $y[] = round((float) $yRaw[$idx], 1);
+        }
+
+        $s = [0.0];
+        $cum = 0.0;
+        for ($i = 1; $i < $nPoints; $i++) {
+            $dist = hypot($x[$i] - $x[$i - 1], $y[$i] - $y[$i - 1]);
+            $cum += $dist;
+            $s[] = round($cum, 1);
+        }
+
+        if ($cum > 0) {
+            $scale = $lengthM / $cum;
+            foreach ($x as $k => $v) { $x[$k] = round($v * $scale, 1); }
+            foreach ($y as $k => $v) { $y[$k] = round($v * $scale, 1); }
+            foreach ($s as $k => $v) { $s[$k] = round($v * $scale, 1); }
+        }
+
+        $simData = [
+            "name" => $name,
+            "location" => $props['Location'] ?? "Circuit",
+            "country" => "International",
+            "year" => (int) ($props['opened'] ?? 2023),
+            "length_m" => $lengthM,
+            "ref_lap_s" => 90.0,
+            "x" => $x,
+            "y" => $y,
+            "s" => $s,
+            "drs_zones" => [],
+            "corners" => []
+        ];
+
+        $tmpDir = $this->python->projectDir() . '/var/cache';
+        if (!is_dir($tmpDir)) {
+            mkdir($tmpDir, 0775, true);
+        }
+        $tmpFile = $tmpDir . '/converted_' . $slug . '.json';
+        file_put_contents($tmpFile, json_encode($simData, JSON_UNESCAPED_UNICODE));
+
+        return $tmpFile;
     }
 
     private function demoCircuit(): string
@@ -373,7 +450,7 @@ class ReplayController extends AbstractController
         if (is_string($teamId) && isset($teams[$teamId])) {
             return $teams[$teamId];
         }
-        $teamName = $driver['team'] ?? null;
+        $teamName = $driver['team'] ?? $driver['ecurie'] ?? null;
         if (is_string($teamName) && $teamName !== '') {
             foreach ($teams as $team) {
                 if (strcasecmp($team['name'], $teamName) === 0) {
