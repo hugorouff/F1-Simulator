@@ -61,16 +61,12 @@ class ReplayController extends AbstractController
         $courseId = $request->query->getInt('course_id');
         $divisionId = $request->query->getInt('division_id');
 
-        // Association des écuries aux pilotes pour la vue
+        // Association des écuries aux pilotes pour l'affichage
         $teams = $this->teamsIndex();
         $drivers = $this->readDrivers();
         foreach ($drivers as &$driver) {
             $team = $this->teamOf($driver, $teams);
-            if ($team !== null) {
-                $driver['display_team'] = $team['name'];
-            } else {
-                $driver['display_team'] = $driver['team'] ?? $driver['ecurie'] ?? 'Indépendant';
-            }
+            $driver['display_team'] = $team['name'] ?? ($driver['team'] ?? $driver['ecurie'] ?? 'Indépendant');
         }
         unset($driver);
 
@@ -88,7 +84,7 @@ class ReplayController extends AbstractController
     public function track(Request $request): JsonResponse
     {
         try {
-            $circuitSlug = trim((string) $request->query->get('circuit', 'bahrain_grand_prix'));
+            $circuitSlug = trim((string) $request->query->get('circuit', ''));
             $file = $this->realCircuit($circuitSlug);
             $circuit = json_decode((string) file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
 
@@ -121,7 +117,7 @@ class ReplayController extends AbstractController
         $temporaryDriversFile = null;
         $enrichedRosterFile = null;
         try {
-            $circuitSlug = trim((string) $q->get('circuit', 'bahrain_grand_prix'));
+            $circuitSlug = trim((string) $q->get('circuit', ''));
             $circuitFile = $demo
                 ? $this->demoCircuit()
                 : $this->realCircuit($circuitSlug);
@@ -155,7 +151,7 @@ class ReplayController extends AbstractController
         } catch (\Throwable $e) {
             return new JsonResponse([
                 'status' => 'error',
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ], 500);
         } finally {
             foreach ([$temporaryDriversFile, $enrichedRosterFile] as $tmp) {
@@ -210,13 +206,106 @@ class ReplayController extends AbstractController
         return new JsonResponse(['saved' => $changed]);
     }
 
+    #[Route('/api/replay/season/commit', name: 'api_replay_season_commit', methods: ['POST'])]
+    public function commitSeasonResults(Request $request, EntityManagerInterface $entityManager, SeasonJsonStore $jsonStore): JsonResponse
+    {
+        if (!$this->isCsrfTokenValid('record_season_results', $request->headers->get('X-CSRF-Token'))) {
+            return new JsonResponse(['error' => 'Jeton de sécurité invalide.'], 403);
+        }
+
+        $body = json_decode($request->getContent(), true);
+        $courseId = is_array($body) ? (int) ($body['course_id'] ?? 0) : 0;
+        $divisionId = is_array($body) ? (int) ($body['division_id'] ?? 0) : 0;
+        $results = is_array($body) ? ($body['results'] ?? null) : null;
+        if ($courseId < 1 || $divisionId < 1 || !is_array($results)) {
+            return new JsonResponse(['error' => 'Résultats de saison invalides.'], 422);
+        }
+
+        $course = $entityManager->getRepository(Course::class)->find($courseId);
+        if ($course === null || $course->getSaison()?->getStatut() === 'terminee') {
+            return new JsonResponse(['error' => 'Course de saison introuvable ou saison terminée.'], 409);
+        }
+
+        $entriesByName = [];
+        foreach ($entityManager->getRepository(Engagement::class)->findBy([
+            'saison' => $course->getSaison(),
+            'statut' => 'actif',
+        ]) as $entry) {
+            $snapshot = $entityManager->getRepository(SaisonEngagementDivision::class)->findOneBy(['engagement' => $entry]);
+            $entryDivision = $snapshot?->getDivision() ?? $entry->getEcurie()?->getDivision();
+            if ($entryDivision?->getId() !== $divisionId || $entry->getPilote() === null) {
+                continue;
+            }
+            $pilot = $entry->getPilote();
+            $entriesByName[trim($pilot->getPrenom() . ' ' . $pilot->getNom())] = $entry;
+        }
+
+        if ($entriesByName === []) {
+            return new JsonResponse(['error' => 'Aucun engagement actif dans cette division.'], 409);
+        }
+
+        $saved = 0;
+        foreach ($results as $raceResult) {
+            if (!is_array($raceResult) || !isset($raceResult['name']) || !is_string($raceResult['name']) || !isset($entriesByName[$raceResult['name']])) {
+                continue;
+            }
+            $entry = $entriesByName[$raceResult['name']];
+            $result = $entityManager->getRepository(ResultatCourse::class)->findOneBy([
+                'course' => $course,
+                'engagement' => $entry,
+            ]) ?? (new ResultatCourse())->setCourse($course)->setEngagement($entry);
+
+            $result
+                ->setPosition(isset($raceResult['position']) ? (int) $raceResult['position'] : null)
+                ->setPoints((float) ($raceResult['points'] ?? 0))
+                ->setDnf(($raceResult['status'] ?? '') === 'DNF')
+                ->setTourLePlusRapide((bool) ($raceResult['fastest_lap'] ?? false))
+                ->setNombreTours((int) ($raceResult['laps'] ?? 0))
+                ->setTempsCourse(isset($raceResult['time_s']) ? (float) $raceResult['time_s'] : null)
+                ->setPositionDepart(isset($raceResult['grid']) ? (int) $raceResult['grid'] : null)
+                ->setPositionArrivee(isset($raceResult['position']) ? (int) $raceResult['position'] : null)
+                ->setCauseAbandon(isset($raceResult['reason']) ? (string) $raceResult['reason'] : null);
+            $entityManager->persist($result);
+            ++$saved;
+        }
+
+        if ($saved !== count($entriesByName)) {
+            return new JsonResponse(['error' => sprintf('Résultats incomplets : %d sur %d.', $saved, count($entriesByName))], 422);
+        }
+
+        $entityManager->flush();
+        $activeEntries = $entityManager->getRepository(Engagement::class)->findBy([
+            'saison' => $course->getSaison(),
+            'statut' => 'actif',
+        ]);
+        $completedEntries = 0;
+        foreach ($activeEntries as $entry) {
+            if ($entityManager->getRepository(ResultatCourse::class)->findOneBy(['course' => $course, 'engagement' => $entry]) !== null) {
+                ++$completedEntries;
+            }
+        }
+        if ($completedEntries === count($activeEntries)) {
+            $course->setStatut('terminee');
+        }
+        $entityManager->flush();
+        $jsonStore->saveSeason($course->getSaison());
+
+        return new JsonResponse(['saved' => $saved, 'course' => $course->getNom()]);
+    }
+
+    /**
+     * Liste les circuits de public/circuits (.geojson puis .json : le .json l'emporte s'il existe).
+     *
+     * @return array<string,array{slug:string,name:string,length_m:float}>
+     */
     private function getLocalCircuits(): array
     {
         $dir = $this->python->projectDir() . '/public/circuits';
         $circuits = [];
 
         if (is_dir($dir)) {
-            $files = array_merge(glob($dir . '/*.json') ?: [], glob($dir . '/*.geojson') ?: []);
+            // geojson d'abord, json ensuite : le json écrase l'entrée du geojson du même nom
+            $files = array_merge(glob($dir . '/*.geojson') ?: [], glob($dir . '/*.json') ?: []);
             foreach ($files as $file) {
                 $content = json_decode((string) file_get_contents($file), true);
                 if (!is_array($content)) {
@@ -231,10 +320,9 @@ class ReplayController extends AbstractController
                 $name = $content['name'] ?? null;
                 $length = $content['length_m'] ?? 0;
 
-                // Support GeoJSON
-                if ($name === null && isset($content['features'][0]['properties'])) {
+                if (isset($content['features'][0]['properties'])) {
                     $props = $content['features'][0]['properties'];
-                    $name = $props['Name'] ?? $props['Location'] ?? ucfirst(str_replace(['_', '-'], ' ', $slug));
+                    $name = $props['Name'] ?? $props['Location'] ?? null;
                     $length = $props['length'] ?? 0;
                 }
 
@@ -246,7 +334,8 @@ class ReplayController extends AbstractController
             }
         }
 
-        uasort($circuits, fn($a, $b) => strcmp($a['name'], $b['name']));
+        uasort($circuits, fn ($a, $b) => strcmp($a['name'], $b['name']));
+
         return $circuits;
     }
 
@@ -271,75 +360,120 @@ class ReplayController extends AbstractController
         throw new \RuntimeException(sprintf("Le circuit '%s' est introuvable dans la bibliothèque locale.", $circuitSlug));
     }
 
+    /**
+     * Convertit un GeoJSON (lon/lat) en circuit exploitable par sim_engine.py :
+     * projection en mètres, rééchantillonnage à distance régulière, boucle fermée.
+     */
     private function convertGeoJsonToEngineFormat(string $geoJsonPath, string $slug): string
     {
-        $content = json_decode((string) file_get_contents($geoJsonPath), true);
-        if (!is_array($content) || !isset($content['features'][0]['geometry']['coordinates'])) {
-            throw new \RuntimeException("Fichier GeoJSON invalide ou corrompu.");
-        }
-
-        $feature = $content['features'][0];
-        $props = $feature['properties'] ?? [];
-        $coords = $feature['geometry']['coordinates'] ?? [];
-        
-        $name = $props['Name'] ?? $props['Location'] ?? ucfirst(str_replace(['_', '-'], ' ', $slug));
-        $lengthM = (float) ($props['length'] ?? 5000);
-
-        $xRaw = [];
-        $yRaw = [];
-        $refLon = $coords[0][0] ?? 0;
-        $refLat = $coords[0][1] ?? 0;
-        $latRad = deg2rad($refLat);
-
-        foreach ($coords as $pt) {
-            $xRaw[] = ($pt[0] - $refLon) * 111000 * cos($latRad);
-            $yRaw[] = ($pt[1] - $refLat) * 111000;
-        }
-
-        $nPoints = 700;
-        $totalRaw = count($xRaw);
-        $x = [];
-        $y = [];
-        for ($i = 0; $i < $nPoints; $i++) {
-            $idx = (int) floor(($i / $nPoints) * $totalRaw);
-            $x[] = round((float) $xRaw[$idx], 1);
-            $y[] = round((float) $yRaw[$idx], 1);
-        }
-
-        $s = [0.0];
-        $cum = 0.0;
-        for ($i = 1; $i < $nPoints; $i++) {
-            $dist = hypot($x[$i] - $x[$i - 1], $y[$i] - $y[$i - 1]);
-            $cum += $dist;
-            $s[] = round($cum, 1);
-        }
-
-        if ($cum > 0) {
-            $scale = $lengthM / $cum;
-            foreach ($x as $k => $v) { $x[$k] = round($v * $scale, 1); }
-            foreach ($y as $k => $v) { $y[$k] = round($v * $scale, 1); }
-            foreach ($s as $k => $v) { $s[$k] = round($v * $scale, 1); }
-        }
-
-        $simData = [
-            "name" => $name,
-            "location" => $props['Location'] ?? "Circuit",
-            "country" => "International",
-            "year" => (int) ($props['opened'] ?? 2023),
-            "length_m" => $lengthM,
-            "ref_lap_s" => 90.0,
-            "x" => $x,
-            "y" => $y,
-            "s" => $s,
-            "drs_zones" => [],
-            "corners" => []
-        ];
-
         $tmpDir = $this->python->projectDir() . '/var/cache';
         if (!is_dir($tmpDir)) {
             mkdir($tmpDir, 0775, true);
         }
-        $tmpFile = $tmpDir . '/converted_' . $slug . '.json';
+        // "v2" : évite de réutiliser d'anciennes conversions faites avec l'échantillonnage par index
+        $tmpFile = $tmpDir . '/converted_v2_' . $slug . '.json';
+        if (is_file($tmpFile) && filemtime($tmpFile) >= filemtime($geoJsonPath)) {
+            return $tmpFile;
+        }
+
+        $content = json_decode((string) file_get_contents($geoJsonPath), true);
+        $feature = is_array($content) ? ($content['features'][0] ?? null) : null;
+        $geometry = is_array($feature) ? ($feature['geometry'] ?? []) : [];
+        $coords = $geometry['coordinates'] ?? null;
+
+        if (!is_array($coords) || $coords === []) {
+            throw new \RuntimeException('Fichier GeoJSON invalide ou corrompu.');
+        }
+        // MultiLineString : on met bout à bout les segments
+        if (($geometry['type'] ?? '') === 'MultiLineString') {
+            $flat = [];
+            foreach ($coords as $line) {
+                foreach ($line as $pt) {
+                    $flat[] = $pt;
+                }
+            }
+            $coords = $flat;
+        }
+        if (count($coords) < 3) {
+            throw new \RuntimeException('Tracé GeoJSON trop court.');
+        }
+
+        $props = $feature['properties'] ?? [];
+        $name = $props['Name'] ?? $props['Location'] ?? ucfirst(str_replace(['_', '-'], ' ', $slug));
+        $lengthM = (float) ($props['length'] ?? 5000);
+        if ($lengthM <= 0) {
+            $lengthM = 5000.0;
+        }
+
+        // Projection locale lon/lat -> mètres
+        $refLon = (float) $coords[0][0];
+        $refLat = (float) $coords[0][1];
+        $cosLat = cos(deg2rad($refLat));
+        $xRaw = [];
+        $yRaw = [];
+        foreach ($coords as $pt) {
+            $xRaw[] = ((float) $pt[0] - $refLon) * 111320 * $cosLat;
+            $yRaw[] = ((float) $pt[1] - $refLat) * 110540;
+        }
+
+        // Fermeture de la boucle
+        $xRaw[] = $xRaw[0];
+        $yRaw[] = $yRaw[0];
+
+        // Distances cumulées sur le tracé brut
+        $cumRaw = [0.0];
+        for ($i = 1, $n = count($xRaw); $i < $n; $i++) {
+            $cumRaw[] = $cumRaw[$i - 1] + hypot($xRaw[$i] - $xRaw[$i - 1], $yRaw[$i] - $yRaw[$i - 1]);
+        }
+        $total = end($cumRaw);
+        if ($total <= 0) {
+            throw new \RuntimeException('Tracé GeoJSON vide.');
+        }
+
+        // Rééchantillonnage à intervalles de distance réguliers (interpolation linéaire)
+        $nPoints = 700;
+        $x = [];
+        $y = [];
+        $s = [];
+        $j = 0;
+        $last = count($cumRaw) - 2;
+        for ($i = 0; $i < $nPoints; $i++) {
+            $target = $total * $i / $nPoints;
+            while ($j < $last && $cumRaw[$j + 1] < $target) {
+                $j++;
+            }
+            $seg = ($cumRaw[$j + 1] - $cumRaw[$j]) ?: 1.0;
+            $t = ($target - $cumRaw[$j]) / $seg;
+            $x[] = $xRaw[$j] + ($xRaw[$j + 1] - $xRaw[$j]) * $t;
+            $y[] = $yRaw[$j] + ($yRaw[$j + 1] - $yRaw[$j]) * $t;
+            $s[] = $target;
+        }
+
+        // Mise à l'échelle sur la longueur officielle
+        $scale = $lengthM / $total;
+        $x = array_map(fn ($v) => round($v * $scale, 1), $x);
+        $y = array_map(fn ($v) => round($v * $scale, 1), $y);
+        $s = array_map(fn ($v) => round($v * $scale, 1), $s);
+
+        // Temps au tour : propriété "ref_lap_s" du GeoJSON si présente, sinon estimation (~58 m/s)
+        $refLap = isset($props['ref_lap_s']) && (float) $props['ref_lap_s'] > 0
+            ? (float) $props['ref_lap_s']
+            : round($lengthM / 58, 1);
+
+        $simData = [
+            'name' => $name,
+            'location' => $props['Location'] ?? 'Circuit',
+            'country' => $props['Country'] ?? 'International',
+            'year' => (int) ($props['opened'] ?? 2023),
+            'length_m' => $lengthM,
+            'ref_lap_s' => $refLap,
+            'x' => $x,
+            'y' => $y,
+            's' => $s,
+            'drs_zones' => [],
+            'corners' => [],
+        ];
+
         file_put_contents($tmpFile, json_encode($simData, JSON_UNESCAPED_UNICODE));
 
         return $tmpFile;
@@ -415,6 +549,7 @@ class ReplayController extends AbstractController
         return $file;
     }
 
+    /** @return list<array<string,mixed>> */
     private function readDrivers(): array
     {
         $file = $this->python->projectDir() . '/data/pilotes.json';
@@ -428,7 +563,7 @@ class ReplayController extends AbstractController
         $file = $this->python->projectDir() . '/data/ecuries.json';
         $raw = is_file($file) ? json_decode((string) file_get_contents($file), true) : [];
         $index = [];
-        
+
         foreach (is_array($raw) ? $raw : [] as $team) {
             if (!is_array($team) || !isset($team['id'])) {
                 continue;
