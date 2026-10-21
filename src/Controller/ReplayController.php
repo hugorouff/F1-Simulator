@@ -52,15 +52,18 @@ class ReplayController extends AbstractController
     #[Route('/replay', name: 'app_replay', methods: ['GET'])]
     public function index(Request $request, CsrfTokenManagerInterface $csrfTokenManager): Response
     {
-        $year = $request->query->getInt('year', 2023);
-        $year = max(2018, min($year, (int) date('Y')));
+        $circuits = $this->getLocalCircuits();
+        $selectedCircuit = trim((string) $request->query->get('circuit', 'bahrain_grand_prix'));
+        if (!isset($circuits[$selectedCircuit]) && $circuits !== []) {
+            $selectedCircuit = array_key_first($circuits);
+        }
+
         $courseId = $request->query->getInt('course_id');
         $divisionId = $request->query->getInt('division_id');
 
         return $this->render('replay/index.html.twig', [
-            'years' => range((int) date('Y'), 2018),
-            'selected_year' => $year,
-            'selected_gp' => trim((string) $request->query->get('gp', 'Monza')),
+            'circuits' => $circuits,
+            'selected_circuit' => $selectedCircuit,
             'course_id' => $courseId > 0 ? $courseId : null,
             'division_id' => $divisionId > 0 ? $divisionId : null,
             'season_csrf_token' => $csrfTokenManager->getToken('record_season_results')->getValue(),
@@ -68,11 +71,12 @@ class ReplayController extends AbstractController
         ]);
     }
 
-    #[Route('/api/fastf1/track/{year}', name: 'api_fastf1_track', requirements: ['year' => '\\d{4}'], methods: ['GET'])]
-    public function track(int $year, Request $request): JsonResponse
+    #[Route('/api/fastf1/track', name: 'api_fastf1_track', methods: ['GET'])]
+    public function track(Request $request): JsonResponse
     {
         try {
-            $file = $this->realCircuit($year, trim((string) $request->query->get('gp', 'Italian Grand Prix')));
+            $circuitSlug = trim((string) $request->query->get('circuit', 'bahrain_grand_prix'));
+            $file = $this->realCircuit($circuitSlug);
             $circuit = json_decode((string) file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
 
             return new JsonResponse($circuit);
@@ -104,9 +108,10 @@ class ReplayController extends AbstractController
         $temporaryDriversFile = null;
         $enrichedRosterFile = null;
         try {
+            $circuitSlug = trim((string) $q->get('circuit', 'bahrain_grand_prix'));
             $circuitFile = $demo
                 ? $this->demoCircuit()
-                : $this->realCircuit($q->getInt('year', 2020), trim((string) $q->get('gp', 'Monza')));
+                : $this->realCircuit($circuitSlug);
 
             $enrichedRosterFile = $this->writeEnrichedRoster();
             $driversFile = $enrichedRosterFile;
@@ -279,39 +284,42 @@ class ReplayController extends AbstractController
         return new JsonResponse(['saved' => $saved, 'course' => $course->getNom()]);
     }
 
-    private function realCircuit(int $year, string $gp): string
+    private function getLocalCircuits(): array
     {
-        if ($year < 2018 || $year > (int) date('Y') || !preg_match('/^[\p{L}0-9 \'\-]{2,40}$/u', $gp)) {
-            throw new \RuntimeException('Année ou Grand Prix invalide.');
-        }
-
-        // Changement ici : on pointe vers public/circuits au lieu de var/circuits
         $dir = $this->python->projectDir() . '/public/circuits';
-        if (!is_dir($dir)) {
-            mkdir($dir, 0775, true);
-        }
+        $circuits = [];
 
-        $slug = preg_replace('/[^a-z0-9]+/', '_', mb_strtolower($gp));
-
-        $candidates = [
-            sprintf('%d_%s.json', $year, $slug),
-            sprintf('%s.json', $slug),
-        ];
-
-        $file = null;
-        foreach ($candidates as $filename) {
-            $path = $dir . '/' . $filename;
-            if (is_file($path)) {
-                $file = $path;
-                break;
+        if (is_dir($dir)) {
+            foreach (glob($dir . '/*.json') as $file) {
+                $content = json_decode((string) file_get_contents($file), true);
+                if (is_array($content)) {
+                    $slug = pathinfo($file, PATHINFO_FILENAME);
+                    $circuits[$slug] = [
+                        'slug' => $slug,
+                        'name' => $content['name'] ?? ucfirst(str_replace('_', ' ', $slug)),
+                        'length_m' => $content['length_m'] ?? 0,
+                    ];
+                }
             }
         }
+        uasort($circuits, fn($a, $b) => strcmp($a['name'], $b['name']));
+        return $circuits;
+    }
 
-        if ($file === null) {
-            throw new \RuntimeException(sprintf("Le circuit pour '%s' (%d) est introuvable dans la bibliothèque locale.", $gp, $year));
+    private function realCircuit(string $circuitSlug): string
+    {
+        if (!preg_match('/^[a-z0-9\-_]{2,50}$/', $circuitSlug)) {
+            throw new \RuntimeException('Identifiant de circuit invalide.');
         }
 
-        return $file;
+        $dir = $this->python->projectDir() . '/public/circuits';
+        $path = $dir . '/' . $circuitSlug . '.json';
+
+        if (!is_file($path)) {
+            throw new \RuntimeException(sprintf("Le circuit '%s' est introuvable dans la bibliothèque locale.", $circuitSlug));
+        }
+
+        return $path;
     }
 
     private function demoCircuit(): string
