@@ -106,7 +106,7 @@
   var speedEl = document.getElementById('speed');
 
   var data = null, geo = null, trackLayer = null;
-  var t = 0;                 // temps de lecture, en "trames" (fractionnaire)
+  var t = 0;
   var playing = true, dirty = false, forceBoard = true;
   var lastTs = 0, lastBoard = 0, dpr = 1, W = 0, H = 0;
   var cars = [], rows = [], resultsByCode = {};
@@ -133,7 +133,6 @@
       .finally(function () { document.getElementById('run-btn').disabled = false; });
   }
 
-  /* ---------- Données de la course (une fois par simulation) ---------- */
   function setup() {
     document.getElementById('viewer').classList.remove('hidden');
 
@@ -146,7 +145,6 @@
       return { d: d, fr: framesByCode[d.code], res: resultsByCode[d.code], dist: 0, x: 0, y: 0 };
     });
 
-    // Lignes du classement : créées une seule fois
     var board = document.getElementById('board');
     board.textContent = '';
     rows = cars.map(function () {
@@ -187,7 +185,6 @@
     layout();
   }
 
-  /* ---------- Géométrie + tracé pré-rendu (au chargement et au resize) ---------- */
   function layout() {
     if (!data) return;
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -206,7 +203,6 @@
       s: c.s, L: c.length_m
     };
 
-    // Le tracé ne change jamais : on le dessine une fois hors écran
     trackLayer = document.createElement('canvas');
     trackLayer.width = W; trackLayer.height = H;
     var g = trackLayer.getContext('2d');
@@ -222,7 +218,6 @@
     dirty = true; forceBoard = true;
   }
 
-  /* ---------- Position sur le tracé ---------- */
   function place(car, dist) {
     var L = geo.L, m = ((dist % L) + L) % L, s = geo.s, lo = 0, hi = s.length - 1;
     while (lo < hi - 1) { var mid = (lo + hi) >> 1; if (s[mid] <= m) lo = mid; else hi = mid; }
@@ -232,7 +227,6 @@
     car.y = geo.py[lo] + (geo.py[nxt] - geo.py[lo]) * k;
   }
 
-  /* ---------- Dessin (à chaque image) ---------- */
   function draw(now) {
     if (!data || !geo) return;
     var maxI = data.race.frame_count - 1;
@@ -240,7 +234,6 @@
     var i1 = Math.min(i0 + 1, maxI);
     var frac = i0 >= maxI ? 0 : t - i0;
 
-    // Interpolation entre deux trames : mouvement continu
     for (var n = 0; n < cars.length; n++) {
       var c = cars[n], a = c.fr.d[i0], b = c.fr.d[i1];
       c.dist = a + (b - a) * frac;
@@ -248,22 +241,25 @@
     }
     var ranked = cars.slice().sort(function (p, q) { return q.dist - p.dist; });
 
+    // Effacer l'image précédente avant de redessiner (supprime la traînée)
+    ctx.clearRect(0, 0, W, H);
     ctx.drawImage(trackLayer, 0, 0);
     ctx.font = 'bold ' + (10 * dpr) + 'px sans-serif';
     ctx.lineWidth = 1.5 * dpr;
-    // Le leader est dessiné en dernier (au-dessus)
     for (var k = ranked.length - 1; k >= 0; k--) {
       var o = ranked[k];
       ctx.beginPath(); ctx.arc(o.x, o.y, 5.5 * dpr, 0, 7);
       ctx.fillStyle = o.d.color; ctx.fill();
       ctx.strokeStyle = '#000'; ctx.stroke();
-      ctx.fillStyle = '#fff';
-      ctx.fillText(o.d.code, o.x + 8 * dpr, o.y - 6 * dpr);
+      // Nom affiché uniquement pour les 3 premiers
+      if (k < 3) {
+        ctx.fillStyle = '#fff';
+        ctx.fillText(o.d.code, o.x + 8 * dpr, o.y - 6 * dpr);
+      }
     }
 
     seekEl.value = t;
 
-    // Textes : seulement 5 fois par seconde (ou immédiatement si on déplace la barre)
     if (forceBoard || now - lastBoard > 200) {
       updateBoard(ranked, i0, maxI);
       lastBoard = now; forceBoard = false;
@@ -273,7 +269,6 @@
   function updateBoard(ranked, i0, maxI) {
     var leader = ranked[0], dt = data.race.frame_dt;
 
-    // Temps écoulé depuis que le leader est passé là où se trouve la voiture o
     function gapTo(o) {
       var arr = leader.fr.d, target = o.dist, lo = 0, hi = i0;
       if (arr[hi] < target) return 0;
@@ -305,9 +300,8 @@
       Math.floor(sec / 60) + ':' + String(Math.floor(sec % 60)).padStart(2, '0');
   }
 
-  /* ---------- Boucle d'animation ---------- */
   function loop(ts) {
-    var delta = Math.min((ts - lastTs) / 1000, 0.1); // évite les sauts (onglet inactif)
+    var delta = Math.min((ts - lastTs) / 1000, 0.1);
     lastTs = ts;
     if (data && playing) {
       var maxI = data.race.frame_count - 1;
@@ -323,7 +317,7 @@
   document.getElementById('demo-btn').addEventListener('click', function () { run(true); });
   playBtn.addEventListener('click', function () {
     if (!data) return;
-    if (t >= data.race.frame_count - 1) t = 0;   // relance depuis le début
+    if (t >= data.race.frame_count - 1) t = 0;
     playing = !playing;
     playBtn.textContent = playing ? '⏸' : '▶';
   });
