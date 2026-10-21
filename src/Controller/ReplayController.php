@@ -71,7 +71,7 @@ class ReplayController extends AbstractController
         ]);
     }
 
-    #[Route('/api/fastf1/track', name: 'api_fastf1_track', methods: ['GET'])]
+    #[Route('/api/circuit/track', name: 'api_circuit_track', methods: ['GET'])]
     public function track(Request $request): JsonResponse
     {
         try {
@@ -81,7 +81,7 @@ class ReplayController extends AbstractController
 
             return new JsonResponse($circuit);
         } catch (Throwable $error) {
-            return new JsonResponse(['error' => $error->getMessage()], 502);
+            return new JsonResponse(['error' => $error->getMessage()], 404);
         }
     }
 
@@ -123,7 +123,7 @@ class ReplayController extends AbstractController
                 $temporaryDriversFile = $this->seasonDriversFile(
                     $q->getInt('course_id'),
                     $q->getInt('division_id'),
-                    $entityManager,
+                    $entityManager
                 );
                 $driversFile = $temporaryDriversFile;
             }
@@ -197,93 +197,6 @@ class ReplayController extends AbstractController
         return new JsonResponse(['saved' => $changed]);
     }
 
-    #[Route('/api/replay/season/commit', name: 'api_replay_season_commit', methods: ['POST'])]
-    public function commitSeasonResults(Request $request, EntityManagerInterface $entityManager, SeasonJsonStore $jsonStore): JsonResponse
-    {
-        if (!$this->isCsrfTokenValid('record_season_results', $request->headers->get('X-CSRF-Token'))) {
-            return new JsonResponse(['error' => 'Jeton de sécurité invalide.'], 403);
-        }
-
-        $body = json_decode($request->getContent(), true);
-        $courseId = is_array($body) ? (int) ($body['course_id'] ?? 0) : 0;
-        $divisionId = is_array($body) ? (int) ($body['division_id'] ?? 0) : 0;
-        $results = is_array($body) ? ($body['results'] ?? null) : null;
-        if ($courseId < 1 || $divisionId < 1 || !is_array($results)) {
-            return new JsonResponse(['error' => 'Résultats de saison invalides.'], 422);
-        }
-
-        $course = $entityManager->getRepository(Course::class)->find($courseId);
-        if ($course === null || $course->getSaison()?->getStatut() === 'terminee') {
-            return new JsonResponse(['error' => 'Course de saison introuvable ou saison terminée.'], 409);
-        }
-
-        $entriesByName = [];
-        foreach ($entityManager->getRepository(Engagement::class)->findBy([
-            'saison' => $course->getSaison(),
-            'statut' => 'actif',
-        ]) as $entry) {
-            $snapshot = $entityManager->getRepository(SaisonEngagementDivision::class)->findOneBy(['engagement' => $entry]);
-            $entryDivision = $snapshot?->getDivision() ?? $entry->getEcurie()?->getDivision();
-            if ($entryDivision?->getId() !== $divisionId || $entry->getPilote() === null) {
-                continue;
-            }
-            $pilot = $entry->getPilote();
-            $entriesByName[trim($pilot->getPrenom() . ' ' . $pilot->getNom())] = $entry;
-        }
-
-        if ($entriesByName === []) {
-            return new JsonResponse(['error' => 'Aucun engagement actif dans cette division.'], 409);
-        }
-
-        $saved = 0;
-        foreach ($results as $raceResult) {
-            if (!is_array($raceResult) || !isset($raceResult['name']) || !is_string($raceResult['name']) || !isset($entriesByName[$raceResult['name']])) {
-                continue;
-            }
-            $entry = $entriesByName[$raceResult['name']];
-            $result = $entityManager->getRepository(ResultatCourse::class)->findOneBy([
-                'course' => $course,
-                'engagement' => $entry,
-            ]) ?? (new ResultatCourse())->setCourse($course)->setEngagement($entry);
-
-            $result
-                ->setPosition(isset($raceResult['position']) ? (int) $raceResult['position'] : null)
-                ->setPoints((float) ($raceResult['points'] ?? 0))
-                ->setDnf(($raceResult['status'] ?? '') === 'DNF')
-                ->setTourLePlusRapide((bool) ($raceResult['fastest_lap'] ?? false))
-                ->setNombreTours((int) ($raceResult['laps'] ?? 0))
-                ->setTempsCourse(isset($raceResult['time_s']) ? (float) $raceResult['time_s'] : null)
-                ->setPositionDepart(isset($raceResult['grid']) ? (int) $raceResult['grid'] : null)
-                ->setPositionArrivee(isset($raceResult['position']) ? (int) $raceResult['position'] : null)
-                ->setCauseAbandon(isset($raceResult['reason']) ? (string) $raceResult['reason'] : null);
-            $entityManager->persist($result);
-            ++$saved;
-        }
-
-        if ($saved !== count($entriesByName)) {
-            return new JsonResponse(['error' => sprintf('Résultats incomplets : %d sur %d.', $saved, count($entriesByName))], 422);
-        }
-
-        $entityManager->flush();
-        $activeEntries = $entityManager->getRepository(Engagement::class)->findBy([
-            'saison' => $course->getSaison(),
-            'statut' => 'actif',
-        ]);
-        $completedEntries = 0;
-        foreach ($activeEntries as $entry) {
-            if ($entityManager->getRepository(ResultatCourse::class)->findOneBy(['course' => $course, 'engagement' => $entry]) !== null) {
-                ++$completedEntries;
-            }
-        }
-        if ($completedEntries === count($activeEntries)) {
-            $course->setStatut('terminee');
-        }
-        $entityManager->flush();
-        $jsonStore->saveSeason($course->getSaison());
-
-        return new JsonResponse(['saved' => $saved, 'course' => $course->getNom()]);
-    }
-
     private function getLocalCircuits(): array
     {
         $dir = $this->python->projectDir() . '/public/circuits';
@@ -294,6 +207,9 @@ class ReplayController extends AbstractController
                 $content = json_decode((string) file_get_contents($file), true);
                 if (is_array($content)) {
                     $slug = pathinfo($file, PATHINFO_FILENAME);
+                    if ($slug === 'demo') {
+                        continue;
+                    }
                     $circuits[$slug] = [
                         'slug' => $slug,
                         'name' => $content['name'] ?? ucfirst(str_replace('_', ' ', $slug)),
@@ -336,11 +252,8 @@ class ReplayController extends AbstractController
         return $file;
     }
 
-    private function seasonDriversFile(
-        int $courseId,
-        int $divisionId,
-        EntityManagerInterface $entityManager,
-    ): string {
+    private function seasonDriversFile(int $courseId, int $divisionId, EntityManagerInterface $entityManager): string
+    {
         $course = $entityManager->getRepository(Course::class)->find($courseId);
         if ($course === null || $course->getSaison()?->getStatut() === 'terminee') {
             throw new \RuntimeException('Course de saison introuvable ou déjà terminée.');
@@ -380,7 +293,7 @@ class ReplayController extends AbstractController
         }
 
         if ($drivers === []) {
-            throw new \RuntimeException('Aucun pilote actif n’est engagé dans cette division pour cette saison.');
+            throw new \RuntimeException('Aucun pilote actif engagé dans cette division.');
         }
 
         $directory = $this->python->projectDir() . '/var/cache';
@@ -395,7 +308,6 @@ class ReplayController extends AbstractController
         return $file;
     }
 
-    /** @return list<array<string,mixed>> */
     private function readDrivers(): array
     {
         $file = $this->python->projectDir() . '/data/pilotes.json';
@@ -415,17 +327,11 @@ class ReplayController extends AbstractController
                 continue;
             }
             $id = (string) $team['id'];
-            
             $color = $team['color'] ?? null;
             if (!is_string($color) || !preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
                 $color = self::TEAM_COLORS[$id] ?? self::FALLBACK_PALETTE[crc32($id) % count(self::FALLBACK_PALETTE)];
             }
-            
-            $index[$id] = [
-                'id' => $id, 
-                'name' => (string) ($team['name'] ?? $id), 
-                'color' => $color
-            ];
+            $index[$id] = ['id' => $id, 'name' => (string) ($team['name'] ?? $id), 'color' => $color];
         }
 
         return $index;
@@ -510,7 +416,6 @@ class ReplayController extends AbstractController
         return $encoded === false ? $json : $encoded;
     }
 
-    /** @return array<string,array<string,float>> */
     private function sanitizeModifiers(mixed $raw): array
     {
         $data = is_string($raw) && $raw !== '' ? json_decode($raw, true) : [];
@@ -530,7 +435,6 @@ class ReplayController extends AbstractController
         return $out;
     }
 
-    /** @return list<array<string,mixed>> */
     private function sanitizeEvents(mixed $raw, int $laps): array
     {
         $data = is_string($raw) && $raw !== '' ? json_decode($raw, true) : [];
