@@ -5,9 +5,9 @@
 {% block body %}
 <section class="relative isolate -mx-4 -mt-4 flex min-h-[560px] items-end overflow-hidden border-b border-f1-border sm:-mx-6 sm:-mt-6">
 	<canvas id="track-preview" class="absolute inset-0 -z-20 h-full w-full" aria-hidden="true"
-			data-track-url="{{ path('api_fastf1_track', {year: 2023}) }}?gp=Italian%20Grand%20Prix"></canvas>
-	<div class="absolute inset-0 -z-10 bg-[#101014]/70" aria-hidden="true"></div>
-	<div class="absolute left-0 top-0 h-full w-2 bg-f1-red" aria-hidden="true"></div>
+        data-track-url="{{ path('api_circuit_track', {circuit: 'be-1925'}) }}"></canvas>
+    <div class="absolute inset-0 -z-10 bg-[#101014]/70" aria-hidden="true"></div>
+    <div class="absolute left-0 top-0 h-full w-2 bg-f1-red" aria-hidden="true"></div>
 
 	<div class="w-full px-6 pb-12 pt-32 sm:px-10 sm:pb-16 lg:px-16">
 		<p class="mb-5 flex items-center gap-3 font-mono text-xs uppercase text-gray-300">
