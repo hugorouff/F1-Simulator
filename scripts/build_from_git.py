@@ -5,9 +5,12 @@ build_from_svg.py
 Convertit les SVG de RaceTracksAPI en circuits JSON pour le simulateur
 (format x / y / s en metres, identique a convertGeoJsonToEngineFormat).
 
+Genere UN fichier par variante de circuit (Le Mans, Nurburgring, Spa ancien...).
+
 Usage (a la racine du projet) :
-    python scripts/build_from_svg.py
-    python scripts/build_from_svg.py --only monza --debug
+    python scripts/build_from_svg.py --clean      # efface les anciens exports puis regenere
+    python scripts/build_from_svg.py --only nurburgring --debug
+    python scripts/build_from_svg.py --current-only   # seulement les trace actuels
 """
 import argparse
 import glob
@@ -19,9 +22,13 @@ import sys
 import unicodedata
 import xml.etree.ElementTree as ET
 
-N_POINTS = 700
+MIN_POINTS = 700
+MAX_POINTS = 2500
+POINT_SPACING_M = 10.0      # ~1 point tous les 10 m sur les longs trace
+SOURCE_TAG = 'racetracksapi-svg'
 CURVE_STEPS = 24
 DUP_RADIUS_KM = 3.0
+DUP_TOLERANCE = 0.03        # ecart de longueur max pour considerer un layout actuel comme le doublon d'un Bacinger
 BACINGER_RE = re.compile(r'^[a-z]{2}-\d{4}$')
 NUM_RE = re.compile(r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?')
 
@@ -286,11 +293,11 @@ def build_xys(points, length_m):
             warn = "trace non ferme (ecart %.0f%% de la longueur)" % (100 * gap / total)
         pts.append(pts[0])
 
-    res = resample_closed(pts, N_POINTS)
+    n = int(min(MAX_POINTS, max(MIN_POINTS, round(length_m / POINT_SPACING_M))))
+    res = resample_closed(pts, n)
     x0, y0 = res[0]
     xs = [p[0] - x0 for p in res]
     ys = [-(p[1] - y0) for p in res]            # axe y du SVG vers le bas -> on inverse
-    n = len(xs)
     chords = [math.hypot(xs[(i + 1) % n] - xs[i], ys[(i + 1) % n] - ys[i]) for i in range(n)]
     k = length_m / sum(chords)
     xs, ys, chords = [v * k for v in xs], [v * k for v in ys], [c * k for c in chords]
@@ -305,9 +312,9 @@ def build_xys(points, length_m):
 # --------------------------------------------------------------------------
 # Utilitaires
 # --------------------------------------------------------------------------
-def slugify(name):
-    ascii_ = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode()
-    return re.sub(r'[^a-z0-9]+', '-', ascii_.lower()).strip('-')[:50].strip('-')
+def slugify(text):
+    ascii_ = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode()
+    return re.sub(r'[^a-z0-9]+', '-', ascii_.lower()).strip('-')
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -316,7 +323,8 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 6371 * 2 * math.asin(math.sqrt(a))
 
 
-def bacinger_centers(out_dir):
+def bacinger_circuits(out_dir):
+    """Circuits Bacinger deja presents : (nom de fichier, lat, lon, longueur en m)."""
     res = []
     for f in glob.glob(os.path.join(out_dir, '*.geojson')):
         base = os.path.splitext(os.path.basename(f))[0]
@@ -324,30 +332,62 @@ def bacinger_centers(out_dir):
             continue
         try:
             with open(f, encoding='utf-8') as fh:
-                coords = json.load(fh)['features'][0]['geometry']['coordinates']
+                feat = json.load(fh)['features'][0]
+            coords = feat['geometry']['coordinates']
             lons, lats = [c[0] for c in coords], [c[1] for c in coords]
-            res.append((base, (min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2))
+            length = float((feat.get('properties') or {}).get('length') or 0)
+            res.append((base, (min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2, length))
         except Exception:
             continue
     return res
 
 
-def pick_layout(track):
-    layouts = [l for l in (track.get('layouts') or []) if l.get('image_id') and l.get('length')]
-    current = [l for l in layouts if l.get('end_year') is None]
-    pool = current or layouts
-    return pool[0] if pool else None
+def usable_layouts(track, current_only):
+    seen, out = set(), []
+    for l in (track.get('layouts') or []):
+        img = l.get('image_id')
+        if not img or not l.get('length') or img in seen:
+            continue
+        if current_only and l.get('end_year') is not None:
+            continue
+        seen.add(img)
+        out.append(l)
+    return out
+
+
+def years_label(layout):
+    a, b = layout.get('start_year'), layout.get('end_year')
+    if a and b:
+        return str(a) if a == b else "%s-%s" % (a, b)
+    if a:
+        return "depuis %s" % a
+    return ""
+
+
+def clean_previous(out_dir):
+    n = 0
+    for f in glob.glob(os.path.join(out_dir, '*.json')):
+        try:
+            with open(f, encoding='utf-8') as fh:
+                if json.load(fh).get('source') == SOURCE_TAG:
+                    os.remove(f)
+                    n += 1
+        except Exception:
+            continue
+    return n
 
 
 def main():
-    ap = argparse.ArgumentParser(description="SVG RaceTracksAPI -> circuits du simulateur")
+    ap = argparse.ArgumentParser(description="SVG RaceTracksAPI -> circuits du simulateur (toutes les variantes)")
     ap.add_argument('--repo', default='tmp_racetracks', help="dossier clone de RaceTracksAPI")
     ap.add_argument('--out', default='public/circuits', help="dossier de sortie")
     ap.add_argument('--only', help="ne traiter que les circuits dont le nom contient ce texte")
+    ap.add_argument('--current-only', action='store_true', help="ignorer les trace historiques (end_year renseigne)")
     ap.add_argument('--keep-duplicates', action='store_true',
-                    help="ne pas sauter les circuits deja fournis par Bacinger")
+                    help="ne pas sauter les trace deja fournis par Bacinger")
+    ap.add_argument('--clean', action='store_true', help="supprimer d'abord les exports precedents de ce script")
     ap.add_argument('--avg-speed', type=float, default=58.0,
-                    help="vitesse moyenne (m/s) pour estimer ref_lap_s = longueur / vitesse (defaut 58, comme ton ReplayController)")
+                    help="vitesse moyenne (m/s) pour estimer ref_lap_s = longueur / vitesse (defaut 58)")
     ap.add_argument('--debug', action='store_true', help="detail des traces candidats par SVG")
     args = ap.parse_args()
 
@@ -357,11 +397,14 @@ def main():
         sys.exit("tracks.json introuvable dans %s (git clone d'abord)" % args.repo)
     os.makedirs(args.out, exist_ok=True)
 
+    if args.clean:
+        print("%d anciens exports supprimes" % clean_previous(args.out))
+
     with open(tracks_file, encoding='utf-8') as fh:
         tracks = json.load(fh)
-    bac = [] if args.keep_duplicates else bacinger_centers(args.out)
+    bac = [] if args.keep_duplicates else bacinger_circuits(args.out)
 
-    ok, skipped, failed, used = 0, [], [], set()
+    ok, n_circuits, skipped, failed, used = 0, 0, [], [], set()
     for track in tracks:
         name = track.get('name') or ''
         if not name or track.get('isFictional'):
@@ -369,78 +412,116 @@ def main():
         if args.only and args.only.lower() not in name.lower():
             continue
 
-        layout = pick_layout(track)
-        if layout is None:
+        layouts = usable_layouts(track, args.current_only)
+        if not layouts:
             failed.append((name, "aucun layout avec image_id et longueur"))
             continue
+        multi = len(layouts) > 1
+        n_circuits += 1
 
         try:
             lat, lon = float(track['latitude']), float(track['longitude'])
         except (TypeError, ValueError, KeyError):
             lat = lon = None
+
+        # Doublon Bacinger : on ne retire QUE le layout actuel (end_year vide) dont la longueur
+        # est la plus proche du Bacinger voisin. Toutes les variantes historiques sont gardees.
+        dup_img, dup_name = None, None
         if lat is not None:
-            dup = next((b for b, blat, blon in bac if haversine_km(lat, lon, blat, blon) < DUP_RADIUS_KM), None)
-            if dup:
-                skipped.append((name, dup))
+            near = [b for b in bac if b[3] > 0 and haversine_km(lat, lon, b[1], b[2]) < DUP_RADIUS_KM]
+            best = None
+            for b in near:
+                for l in layouts:
+                    if l.get('end_year') is not None:
+                        continue
+                    diff = abs(b[3] - float(l['length']) * 1000) / b[3]
+                    if diff < DUP_TOLERANCE and (best is None or diff < best[0]):
+                        best = (diff, l['image_id'], b[0])
+            if best:
+                dup_img, dup_name = best[1], best[2]
+
+        for layout in layouts:
+            length_m = float(layout['length']) * 1000
+            label = "%s / %s" % (name, layout.get('name') or layout['image_id'])
+            if multi and years_label(layout):
+                label += " (%s)" % years_label(layout)
+
+            if layout['image_id'] == dup_img:
+                skipped.append((label, dup_name))
                 continue
 
-        svg_file = os.path.join(svg_dir, 'track_%s.svg' % layout['image_id'])
-        if not os.path.isfile(svg_file):
-            failed.append((name, "SVG introuvable : %s" % svg_file))
-            continue
+            svg_file = os.path.join(svg_dir, 'track_%s.svg' % layout['image_id'])
+            if not os.path.isfile(svg_file):
+                failed.append((label, "SVG introuvable : %s" % svg_file))
+                continue
+            try:
+                cands, errors = svg_candidates(svg_file)
+            except ET.ParseError as e:
+                failed.append((label, "SVG illisible : %s" % e))
+                continue
 
-        try:
-            cands, errors = svg_candidates(svg_file)
-        except ET.ParseError as e:
-            failed.append((name, "SVG illisible : %s" % e))
-            continue
+            if args.debug:
+                print("\n== %s  (%s)" % (label, os.path.basename(svg_file)))
+                for c in sorted(cands, key=lambda c: -c['len'])[:6]:
+                    print("   %-9s %-18s %5d pts  longueur svg %.1f" % (c['tag'], c['id'][:18], len(c['pts']), c['len']))
+                for e in errors:
+                    print("   ERREUR", e)
 
-        if args.debug:
-            print("\n== %s  (%s)" % (name, os.path.basename(svg_file)))
-            for c in sorted(cands, key=lambda c: -c['len'])[:6]:
-                print("   %-9s %-18s %5d pts  longueur svg %.1f" % (c['tag'], c['id'][:18], len(c['pts']), c['len']))
-            for e in errors:
-                print("   ERREUR", e)
+            if not cands:
+                failed.append((label, "aucun trace dans le SVG" + (" (%s)" % errors[0] if errors else "")))
+                continue
+            best = max(cands, key=lambda c: c['len'])
+            try:
+                xs, ys, s, warn = build_xys(best['pts'], length_m)
+            except ValueError as e:
+                failed.append((label, str(e)))
+                continue
 
-        if not cands:
-            failed.append((name, "aucun trace dans le SVG" + (" (%s)" % errors[0] if errors else "")))
-            continue
+            # nom affiche dans le menu : le nom du circuit, + variante si plusieurs
+            display = name
+            if multi:
+                display += " - %s" % (layout.get('name') or "variante")
+                if years_label(layout):
+                    display += " (%s)" % years_label(layout)
 
-        best = max(cands, key=lambda c: c['len'])
-        length_m = float(layout['length']) * 1000
-        try:
-            xs, ys, s, warn = build_xys(best['pts'], length_m)
-        except ValueError as e:
-            failed.append((name, str(e)))
-            continue
+            # slug (<= 50 caracteres, impose par le ReplayController)
+            slug = slugify(name)[:29].strip('-') or 'circuit'
+            if multi:
+                parts = [slugify(layout.get('name') or '')[:15].strip('-'), str(layout.get('start_year') or '')]
+                slug += '-' + '-'.join(p for p in parts if p)
+            base, i = slug, 2
+            while slug in used:
+                slug = "%s-%d" % (base[:46], i)
+                i += 1
+            used.add(slug)
 
-        slug = slugify(name) or 'circuit'
-        base, i = slug, 2
-        while slug in used:
-            slug = "%s-%d" % (base[:46], i)
-            i += 1
-        used.add(slug)
+            data = {
+                "name": display,
+                "location": track.get('region') or track.get('country') or name,
+                "country": track.get('country') or 'XX',
+                "year": int(layout.get('start_year') or 0),
+                "length_m": length_m,
+                "ref_lap_s": round(length_m / args.avg_speed, 1),
+                "x": xs, "y": ys, "s": s,
+                "drs_zones": [],
+                "corners": [],
+                "source": SOURCE_TAG,
+                "track_id": track.get('id'),
+                "layout_id": layout.get('layout_id'),
+            }
+            with open(os.path.join(args.out, slug + '.json'), 'w', encoding='utf-8') as fh:
+                json.dump(data, fh, ensure_ascii=False)
+            ok += 1
+            if warn:
+                print("[!] %s : %s" % (label, warn))
 
-        data = {
-            "name": name,
-            "location": track.get('region') or track.get('country') or name,
-            "country": track.get('country') or 'XX',
-            "year": int(layout.get('start_year') or 0),
-            "length_m": length_m,
-            "ref_lap_s": round(length_m / args.avg_speed, 1),   # temps au tour de reference (estime)
-            "x": xs, "y": ys, "s": s,
-            "drs_zones": [],
-            "corners": [],
-        }
-        with open(os.path.join(args.out, slug + '.json'), 'w', encoding='utf-8') as fh:
-            json.dump(data, fh, ensure_ascii=False)
-        ok += 1
-        if warn:
-            print("[!] %s : %s" % (name, warn))
-
-    print("\n%d circuits ecrits dans %s" % (ok, args.out))
+    print("\n%d trace ecrits (%d circuits) dans %s" % (ok, n_circuits, args.out))
     if skipped:
-        print("%d ignores (deja couverts par Bacinger, utilise --keep-duplicates pour les forcer)" % len(skipped))
+        print("%d ignores (layout actuel deja fourni par Bacinger, --keep-duplicates pour forcer) :" % len(skipped))
+        for n, b in skipped[:15]:
+            print("   - %s  ->  %s" % (n, b))
+        if len(skipped) > 15:
+            print("   ... et %d autres" % (len(skipped) - 15))
     if failed:
         print("%d en echec :" % len(failed))
         for n, why in failed:
